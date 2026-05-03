@@ -20,6 +20,13 @@ void kprint_hex(u32 value) {
     }
 }
 
+void kprint_hex8(u8 value) {
+    char hex[] = "0123456789ABCDEF";
+    kprint("0x");
+    terminal_putchar(hex[(value >> 4) & 0xF]);
+    terminal_putchar(hex[value & 0xF]);
+}
+
 void kprint_dec(u32 value) {
     char buf[12];
     int i = 0;

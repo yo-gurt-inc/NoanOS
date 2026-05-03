@@ -13,4 +13,6 @@ typedef long long s64;
 
 typedef u32 size_t;
 
+#define NULL ((void*)0)
+
 #endif
