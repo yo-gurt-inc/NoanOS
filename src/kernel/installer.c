@@ -42,7 +42,7 @@ static void reboot(void) {
 void installer_start(u32 boot_drive) {
     kprint_init(); // Clear screen
     kprint("======================================\n");
-    kprint("      Simple OS Installation Menu     \n");
+    kprint("         NoanOS Installation Menu     \n");
     kprint("======================================\n\n");
     
     int boot_idx = (boot_drive >= 0x80) ? (boot_drive - 0x80) : 0;
@@ -155,7 +155,7 @@ void installer_start(u32 boot_drive) {
             kfree(buf);
             kfree(bpb_buf);
 
-            kprint("\nSuccess! Simple OS is now installed.\n");
+            kprint("\nSuccess! NoanOS is now installed.\n");
             kprint("Press any key to reboot...");
             wait_for_key();
             reboot();
