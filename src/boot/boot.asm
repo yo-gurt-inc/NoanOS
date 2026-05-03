@@ -185,7 +185,7 @@ gdt_descriptor:
     dd gdt_start
 
 msg db "Err", 0
-smart_boot_msg db "Booting HDD... (I: Installer)", 13, 10, 0
+smart_boot_msg db "Booting HDD... (Press I to go back to Installer)", 13, 10, 0
 boot_drive db 0
 
 times 510 - ($-$$) db 0
