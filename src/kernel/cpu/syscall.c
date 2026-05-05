@@ -49,7 +49,8 @@ u32 syscall_handler(u32 esp) {
             u32 entry = noan_load((const char*)arg1);
             if (entry) {
                 noan_execute(entry, (const char*)arg1);
-                return task_switch(esp);
+                ret = 0;  // Return success (0)
+                // Fall through to normal return path which will set EAX then task_switch
             } else {
                 ret = -1;
             }
@@ -146,6 +147,13 @@ u32 syscall_handler(u32 esp) {
     }
 
     regs->eax = (u32)ret;
+    
+    // Special case: If parent was marked WAITING (by SYS_EXEC), force task switch
+    process_t* current = get_current_process();
+    if (current && current->state == TASK_WAITING) {
+        return task_switch(esp);
+    }
+    
     return esp;
 }
 
