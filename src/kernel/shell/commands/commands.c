@@ -57,17 +57,17 @@ static int strcmp(const char* s1, const char* s2) {
 }
 
 int execute_command(const char* cmd_line) {
-    char buf[128];
-    char* argv[16];
+    char buf[256];
+    char* argv[32];
     int argc = 0;
     
     // Copy to local buffer
     int i = 0;
-    for (; cmd_line[i] && i < 127; i++) buf[i] = cmd_line[i];
+    for (; cmd_line[i] && i < 255; i++) buf[i] = cmd_line[i];
     buf[i] = '\0';
 
     char* p = buf;
-    while (*p && argc < 16) {
+    while (*p && argc < 32) {
         // Skip leading whitespace (anything <= 32 is treated as space)
         while (*p && (unsigned char)*p <= 32) p++;
         if (*p == '\0') break;
@@ -83,20 +83,29 @@ int execute_command(const char* cmd_line) {
 
     if (argc == 0) return 0;
 
-    // 1. Try to load and execute from /bin/
-    if (_syscall1(SYS_EXEC, (u32)cmd_line) == 0) {
-        return 0; // Success
-    }
-
-    // 2. Fall back to built-in commands
+    // Try built-in commands first
     for (int j = 0; j < num_commands; j++) {
         if (strcmp(argv[0], commands[j].name) == 0) {
             return commands[j].handler(argc, argv);
         }
     }
 
+    // If not a built-in, try to execute as external binary
+    // Pass full command line to SYS_EXEC which handles path parsing and argc/argv setup
+    if (_syscall1(SYS_EXEC, (u32)cmd_line) == 0) {
+        return 0;  // Success
+    }
+
+    // If execution failed - extract just the command name from original cmd_line
+    char cmd_name[64];
+    int k = 0;
+    for (int j = 0; cmd_line[j] && (unsigned char)cmd_line[j] > 32 && k < 63; j++) {
+        cmd_name[k++] = cmd_line[j];
+    }
+    cmd_name[k] = '\0';
+    
     _syscall1(SYS_PRINT, (u32)"Unknown command: ");
-    _syscall1(SYS_PRINT, (u32)argv[0]);
+    _syscall1(SYS_PRINT, (u32)cmd_name);
     _syscall1(SYS_PUTCHAR, '\n');
     return -1;
 }
