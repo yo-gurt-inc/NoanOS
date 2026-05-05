@@ -2,6 +2,13 @@
 #include "core/types.h"
 #include "shell/commands.h"
 
+void shell_main(void);
+
+void _start(void) {
+    shell_main();
+    _syscall0(SYS_EXIT);
+}
+
 #define shell_print(s) _syscall1(SYS_PRINT, (u32)(s))
 #define shell_putchar(c) _syscall1(SYS_PUTCHAR, (u32)(c))
 
@@ -11,7 +18,7 @@ char current_path[256] = "/";
 static char history[MAX_HISTORY][128];
 static int history_count = 0;
 static int history_index = -1;
-static const char* history_file = ".sh_hist";
+static const char* history_file = "/.sh_hist";
 
 static int strcmp(const char* s1, const char* s2) {
     while (*s1 && (*s1 == *s2)) { s1++; s2++; }
@@ -43,9 +50,7 @@ static size_t strlen(const char* s) {
 
 static int shell_getchar(void) {
     int c;
-    while ((c = _syscall0(SYS_READ)) == 0) {
-        _syscall0(SYS_YIELD);
-    }
+    while ((c = _syscall0(SYS_READ)) == 0);
     return c;
 }
 
@@ -105,7 +110,6 @@ static void add_history(const char* cmd) {
 }
 
 void shell_main(void) {
-    _syscall0(SYS_CLEAR); // Clear screen
     load_history();
     shell_print("=== NoanOS Shell (User Mode) ===\n");
     shell_print("Type 'help' for commands.\n");
@@ -141,10 +145,11 @@ void shell_main(void) {
                 shell_putchar('\b');
             }
         } else if (c == '\033') { // Arrow Keys
-            c = shell_getchar();
-            if (c == '[') {
-                c = shell_getchar();
-                if (c == 'A') { // Up
+            // Only proceed if it's really an arrow key sequence ([A or [B)
+            int c2 = shell_getchar();
+            if (c2 == '[') {
+                int c3 = shell_getchar();
+                if (c3 == 'A') { // Up
                     if (history_count > 0 && history_index < history_count - 1) {
                         // Clear current line
                         for (int i = 0; i < len; i++) shell_putchar('\b');
@@ -154,7 +159,7 @@ void shell_main(void) {
                         len = strlen(cmd);
                         shell_print(cmd);
                     }
-                } else if (c == 'B') { // Down
+                } else if (c3 == 'B') { // Down
                     if (history_index > -1) {
                         // Clear current line
                         for (int i = 0; i < len; i++) shell_putchar('\b');

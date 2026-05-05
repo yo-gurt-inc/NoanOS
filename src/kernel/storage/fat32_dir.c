@@ -49,9 +49,11 @@ void fat32_ls(void) {
         if (entries[i].attr == FAT_ATTR_LFN) continue;
         
         count++;
+        // Print filename (up to 8 chars)
         for (int j = 0; j < 8; j++) {
             if (entries[i].name[j] != ' ') terminal_putchar(entries[i].name[j]);
         }
+        // Print extension if it exists (up to 3 chars)
         if (entries[i].name[8] != ' ') {
             terminal_putchar('.');
             for (int j = 8; j < 11; j++) {
@@ -59,10 +61,14 @@ void fat32_ls(void) {
             }
         }
         
+        // Print type indicator
         if (entries[i].attr & FAT_ATTR_DIRECTORY) {
-            kprint(" [DIR]");
-        } else {
-            kprint(" ("); kprint_dec(entries[i].file_size); kprint(" bytes)");
+            kprint("/");
+        }
+        
+        // Print file size for regular files
+        if (!(entries[i].attr & FAT_ATTR_DIRECTORY)) {
+            kprint(" ("); kprint_dec(entries[i].file_size); kprint("B)");
         }
         kprint("\n");
     }

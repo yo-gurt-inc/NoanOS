@@ -85,7 +85,7 @@ int fat32_format(ata_drive_t* drive) {
     f->boot_jmp[0] = 0xEB; f->boot_jmp[1] = 0x3C; f->boot_jmp[2] = 0x90;
     for(int i=0; i<8; i++) f->oem_name[i] = "SIMPLEOS"[i];
     f->bytes_per_sector = 512;
-    f->sectors_per_cluster = 1;
+    f->sectors_per_cluster = 8;
     f->reserved_sector_count = 128;
     f->num_fats = 2;
     f->media_type = 0xF8;
@@ -226,48 +226,300 @@ u32 _fat32_find_free_cluster(void) {
 // HELPER: Create a directory entry
 // ============================================================================
 void _fat32_create_entry(const char* name, u8 attr, u32 first_cluster, u32 size) {
-    u16* buf = (u16*)kmalloc(bpb.sectors_per_cluster * 512);
-    if (!buf) return;
+    u32 target_dir_cluster = current_dir_cluster;
+    const char* path = name;
 
-    ata_read_sectors(current_drive, _fat32_cluster_to_lba(current_dir_cluster), bpb.sectors_per_cluster, buf);
-    fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
-    int max_entries = (bpb.sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
+    if (name[0] == '/') {
+        target_dir_cluster = bpb.root_cluster;
+        path = name + 1;
+    }
 
-    for (int i = 0; i < max_entries; i++) {
-        if (entries[i].name[0] == 0x00 || entries[i].name[0] == 0xE5) {
-            _fat32_name_to_83(name, entries[i].name);
-            entries[i].attr = attr;
-            entries[i].cluster_hi = (u16)(first_cluster >> 16);
-            entries[i].cluster_lo = (u16)(first_cluster & 0xFFFF);
-            entries[i].file_size = size;
-            ata_write_sectors(current_drive, _fat32_cluster_to_lba(current_dir_cluster), bpb.sectors_per_cluster, buf);
+    // Navigate/create directory structure for nested paths
+    char component[64];
+    while (*path) {
+        // Find next "/" or end of string
+        int component_len = 0;
+        while (path[component_len] && path[component_len] != '/') {
+            component_len++;
+        }
+
+        if (component_len == 0) {
+            // Empty component (double slash or trailing slash)
+            if (*path == '/') path++;
+            else break;
+            continue;
+        }
+
+        // Extract component
+        for (int i = 0; i < component_len && i < 63; i++) {
+            component[i] = path[i];
+        }
+        component[component_len] = '\0';
+
+        // Check if this is the final component
+        if (path[component_len] == '\0') {
+            // Final component - this is the file/directory we're creating
+            u8 fat_name[11];
+            _fat32_name_to_83(component, fat_name);
+
+            u16* buf = (u16*)kmalloc(bpb.sectors_per_cluster * 512);
+            if (!buf) return;
+
+            ata_read_sectors(current_drive, _fat32_cluster_to_lba(target_dir_cluster), bpb.sectors_per_cluster, buf);
+            fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
+            int max_entries = (bpb.sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
+
+            for (int i = 0; i < max_entries; i++) {
+                if (entries[i].name[0] == 0x00 || entries[i].name[0] == 0xE5) {
+                    for (int j = 0; j < 11; j++) {
+                        entries[i].name[j] = fat_name[j];
+                    }
+                    entries[i].attr = attr;
+                    entries[i].cluster_hi = (u16)(first_cluster >> 16);
+                    entries[i].cluster_lo = (u16)(first_cluster & 0xFFFF);
+                    entries[i].file_size = size;
+                    ata_write_sectors(current_drive, _fat32_cluster_to_lba(target_dir_cluster), bpb.sectors_per_cluster, buf);
+                    kfree(buf);
+                    return;
+                }
+            }
             kfree(buf);
             return;
+        } else {
+            // Intermediate component - navigate to this directory, creating if needed
+            u8 fat_name[11];
+            _fat32_name_to_83(component, fat_name);
+
+            u16* buf = (u16*)kmalloc(bpb.sectors_per_cluster * 512);
+            if (!buf) return;
+
+            ata_read_sectors(current_drive, _fat32_cluster_to_lba(target_dir_cluster), bpb.sectors_per_cluster, buf);
+            fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
+            int max_entries = (bpb.sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
+
+            // Search for the directory
+            int found = 0;
+            u32 next_cluster = 0;
+            for (int i = 0; i < max_entries; i++) {
+                if (entries[i].name[0] == 0x00) break;
+                if (entries[i].name[0] == 0xE5) continue;
+
+                // Check if this entry matches
+                int match = 1;
+                for (int j = 0; j < 11; j++) {
+                    if (entries[i].name[j] != fat_name[j]) {
+                        match = 0;
+                        break;
+                    }
+                }
+
+                if (match && (entries[i].attr & FAT_ATTR_DIRECTORY)) {
+                    next_cluster = ((u32)entries[i].cluster_hi << 16) | entries[i].cluster_lo;
+                    if (next_cluster == 0) next_cluster = bpb.root_cluster;
+                    found = 1;
+                    break;
+                }
+            }
+
+            if (found) {
+                // Directory exists, navigate to it
+                target_dir_cluster = next_cluster;
+                path = path + component_len + 1;
+                kfree(buf);
+                continue;
+            } else {
+                // Directory doesn't exist - need to create it
+                u32 new_cluster = _fat32_find_free_cluster();
+                if (!new_cluster) {
+                    kfree(buf);
+                    return;
+                }
+
+                _fat32_set_fat_entry(new_cluster, 0x0FFFFFFF);
+
+                // Add entry to current directory
+                for (int i = 0; i < max_entries; i++) {
+                    if (entries[i].name[0] == 0x00 || entries[i].name[0] == 0xE5) {
+                        for (int j = 0; j < 11; j++) {
+                            entries[i].name[j] = fat_name[j];
+                        }
+                        entries[i].attr = FAT_ATTR_DIRECTORY;
+                        entries[i].cluster_hi = (u16)(new_cluster >> 16);
+                        entries[i].cluster_lo = (u16)(new_cluster & 0xFFFF);
+                        entries[i].file_size = 0;
+                        ata_write_sectors(current_drive, _fat32_cluster_to_lba(target_dir_cluster), bpb.sectors_per_cluster, buf);
+                        break;
+                    }
+                }
+
+                // Initialize new directory with . and .. entries
+                u8* dir_buf = (u8*)kmalloc(bpb.sectors_per_cluster * 512);
+                if (dir_buf) {
+                    for (int i = 0; i < bpb.sectors_per_cluster * 512; i++) dir_buf[i] = 0;
+                    fat32_dir_entry_t* dir_entries = (fat32_dir_entry_t*)dir_buf;
+
+                    // . entry
+                    _fat32_name_to_83(".", dir_entries[0].name);
+                    dir_entries[0].attr = FAT_ATTR_DIRECTORY;
+                    dir_entries[0].cluster_hi = (u16)(new_cluster >> 16);
+                    dir_entries[0].cluster_lo = (u16)(new_cluster & 0xFFFF);
+
+                    // .. entry
+                    _fat32_name_to_83("..", dir_entries[1].name);
+                    dir_entries[1].attr = FAT_ATTR_DIRECTORY;
+                    dir_entries[1].cluster_hi = (u16)(target_dir_cluster >> 16);
+                    dir_entries[1].cluster_lo = (u16)(target_dir_cluster & 0xFFFF);
+
+                    ata_write_sectors(current_drive, _fat32_cluster_to_lba(new_cluster), bpb.sectors_per_cluster, (u16*)dir_buf);
+                    kfree(dir_buf);
+                }
+
+                target_dir_cluster = new_cluster;
+                path = path + component_len + 1;
+                kfree(buf);
+                continue;
+            }
         }
     }
-    kfree(buf);
 }
 
 // ============================================================================
 // HELPER: Find a directory entry
 // ============================================================================
 int _fat32_find_entry(const char* name, fat32_dir_entry_t* out_entry) {
-    u8 fat_name[11];
-    _fat32_name_to_83(name, fat_name);
+    u32 search_cluster = current_dir_cluster;
+    const char* remaining = name;
 
+    if (name[0] == '/') {
+        search_cluster = bpb.root_cluster;
+        remaining = name + 1;
+    }
+
+    while (remaining && *remaining) {
+        // Find the next "/" or end of string
+        const char* next_slash = remaining;
+        int component_len = 0;
+        while (*next_slash && *next_slash != '/') {
+            next_slash++;
+            component_len++;
+        }
+
+        if (component_len == 0) {
+            // Empty component (double slash or trailing slash)
+            if (*next_slash == '/') remaining = next_slash + 1;
+            else break;
+            continue;
+        }
+
+        // Extract component and convert to 8.3 format
+        char component[64];
+        for (int i = 0; i < component_len && i < 63; i++) {
+            component[i] = remaining[i];
+        }
+        component[component_len] = '\0';
+
+        u8 fat_name[11];
+        _fat32_name_to_83(component, fat_name);
+
+        // Search this component in the current directory
+        u16* buf = (u16*)kmalloc(bpb.sectors_per_cluster * 512);
+        if (!buf) return 0;
+        
+        ata_read_sectors(current_drive, _fat32_cluster_to_lba(search_cluster), bpb.sectors_per_cluster, buf);
+        fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
+        int max_entries = (bpb.sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
+
+        int found = 0;
+        fat32_dir_entry_t found_entry;
+        for (int i = 0; i < max_entries; i++) {
+            if (entries[i].name[0] == 0x00) {
+                break;
+            }
+            if (entries[i].name[0] == 0xE5) continue;
+            
+            int match = 1;
+            for (int j = 0; j < 11; j++) {
+                if (entries[i].name[j] != fat_name[j]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (match) {
+                found_entry = entries[i];
+                found = 1;
+                break;
+            }
+        }
+        kfree(buf);
+
+        if (!found) {
+            return 0;
+        }
+
+        // Check if this is the last component
+        if (*next_slash == '\0') {
+            // Last component found
+            if (out_entry) *out_entry = found_entry;
+            return 1;
+        }
+
+        // More components - this entry must be a directory
+        if (!(found_entry.attr & FAT_ATTR_DIRECTORY)) {
+            return 0;  // Can't traverse through a file
+        }
+
+        // Move to next component in next directory
+        search_cluster = ((u32)found_entry.cluster_hi << 16) | found_entry.cluster_lo;
+        if (search_cluster == 0) search_cluster = bpb.root_cluster;
+        
+        remaining = next_slash + 1;
+    }
+
+    return 0;
+}
+
+// Helper: Search for a file with a full path stored as the filename
+// (handles malformed FAT32 where files are named "BIN/SHELL" instead of being in a BIN directory)
+int _fat32_find_full_path_file(const char* path, fat32_dir_entry_t* out_entry) {
+    // Convert path to uppercase FAT32 name format, keeping the "/"
+    u8 fat_name[11];
+    for(int i=0; i<11; i++) fat_name[i] = ' ';
+    
+    int i = 0, j = 0;
+    while(path[i] && j < 8) {
+        char c = path[i++];
+        if(c >= 'a' && c <= 'z') c -= 32;
+        fat_name[j++] = c;
+    }
+    
+    // Handle the rest (usually extension)
+    if(path[i] && j < 11) {
+        while(path[i] && j < 11) {
+            char c = path[i++];
+            if(c >= 'a' && c <= 'z') c -= 32;
+            fat_name[j++] = c;
+        }
+    }
+    
+    // Search in root directory
     u16* buf = (u16*)kmalloc(bpb.sectors_per_cluster * 512);
     if (!buf) return 0;
     
-    ata_read_sectors(current_drive, _fat32_cluster_to_lba(current_dir_cluster), bpb.sectors_per_cluster, buf);
+    ata_read_sectors(current_drive, _fat32_cluster_to_lba(bpb.root_cluster), bpb.sectors_per_cluster, buf);
     fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
     int max_entries = (bpb.sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
-
+    
     for (int i = 0; i < max_entries; i++) {
         if (entries[i].name[0] == 0x00) break;
         if (entries[i].name[0] == 0xE5) continue;
         
         int match = 1;
-        for(int j=0; j<11; j++) if(entries[i].name[j] != fat_name[j]) match = 0;
+        for (int k = 0; k < 11; k++) {
+            if (entries[i].name[k] != fat_name[k]) {
+                match = 0;
+                break;
+            }
+        }
         if (match) {
             if (out_entry) *out_entry = entries[i];
             kfree(buf);

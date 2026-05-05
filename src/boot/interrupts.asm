@@ -39,11 +39,11 @@ ISR_NOERRCODE 9
 ISR_ERRCODE 10
 ISR_ERRCODE 11
 ISR_ERRCODE 12
-ISR_NOERRCODE 13
+ISR_ERRCODE 13
 ISR_ERRCODE 14
 ISR_NOERRCODE 15
 ISR_NOERRCODE 16
-ISR_NOERRCODE 17
+ISR_ERRCODE 17
 ISR_NOERRCODE 18
 ISR_NOERRCODE 19
 ISR_NOERRCODE 20
@@ -98,30 +98,30 @@ common_stub:
     mov fs, ax
     mov gs, ax
 
-    mov eax, [esp + 36] ; Get int_no
+    push esp            ; Pass pointer to registers struct as Argument 1
+    
+    mov eax, [esp + 40] ; Get int_no (shifted by 4 because of push esp)
     cmp eax, 128
     je .do_syscall
     cmp eax, 32
     jae .do_irq
     
-    push esp            ; Pass registers pointer
     call isr_handler
-    mov esp, eax        ; Switch stack if needed
-    jmp .done
+    jmp .cleanup
     
 .do_irq:
-    push esp
     call irq_handler
-    mov esp, eax
-    jmp .done
+    jmp .cleanup
     
 .do_syscall:
-    push esp
     call syscall_handler
-    mov esp, eax
+
+.cleanup:
+    add esp, 4          ; Clean up the 'push esp' argument
+    mov esp, eax        ; Switch to the returned stack pointer (points to 'ds')
 
 .done:
-    pop eax
+    pop eax             ; Pops DS
     mov ds, ax
     mov es, ax
     mov fs, ax

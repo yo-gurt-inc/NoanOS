@@ -2,6 +2,7 @@
 #include "io/io.h"
 #include "cpu/idt.h"
 #include "io/kprint.h"
+#include "cpu/task.h"
 
 #define KEYBOARD_DATA_PORT 0x60
 #define KEYBOARD_STATUS_PORT 0x64
@@ -61,6 +62,18 @@ u32 keyboard_handler(u32 esp) {
         kprint("SC:");
         kprint_hex8(scancode);
         kprint(scancode & 0x80 ? "(UP) " : "(DN) ");
+    }
+
+    // Wake up all processes that might be waiting for keyboard input
+    process_t* proc = get_process_list();
+    if (proc) {
+        process_t* start = proc;
+        do {
+            if (proc->state == TASK_SLEEPING) {
+                proc->state = TASK_READY;
+            }
+            proc = proc->next;
+        } while (proc != start);
     }
 
     // Modifiers

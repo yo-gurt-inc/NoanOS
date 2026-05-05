@@ -83,6 +83,12 @@ int execute_command(const char* cmd_line) {
 
     if (argc == 0) return 0;
 
+    // 1. Try to load and execute from /bin/
+    if (_syscall1(SYS_EXEC, (u32)cmd_line) == 0) {
+        return 0; // Success
+    }
+
+    // 2. Fall back to built-in commands
     for (int j = 0; j < num_commands; j++) {
         if (strcmp(argv[0], commands[j].name) == 0) {
             return commands[j].handler(argc, argv);

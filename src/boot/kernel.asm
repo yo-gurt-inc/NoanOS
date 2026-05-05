@@ -8,9 +8,14 @@ section .text
  
     
 _start:                ; This will be at 0x100000 when loaded
+    ; Diagnostic 'K'
+    mov word [0xB8000], 0x0F4B ; 'K' on black, bright white
+    
     ; Set up stack if needed
     mov esp, 0x9C00    ; Or wherever you want your kernel stack
     
+    ; Push the initrd address passed in ESI from the bootloader
+    push esi
     ; Push the boot drive passed in EAX from the bootloader
     push eax
     

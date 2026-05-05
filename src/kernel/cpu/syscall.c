@@ -9,6 +9,9 @@
 #include "core/panic.h"
 #include "system/rtc.h"
 #include "storage/ata.h"
+#include "system/timer.h"
+#include "storage/noan.h"
+#include "core/initrd.h"
 
 extern void syscall_stub(void);
 
@@ -23,13 +26,46 @@ u32 syscall_handler(u32 esp) {
 
     switch (num) {
         case SYS_EXIT:
-            kprint("Process terminated\n");
+            process_t* current = get_current_process();
+            if (current) {
+                current->state = TASK_TERMINATED;
+                // Wake up parent if it's waiting
+                if (current->parent_id > 0) {
+                    process_t* p = get_process_list();
+                    process_t* start = p;
+                    do {
+                        if (p->id == current->parent_id) {
+                            if (p->state == TASK_WAITING) {
+                                p->state = TASK_READY;
+                            }
+                            break;
+                        }
+                        p = p->next;
+                    } while (p != start);
+                }
+            }
             return task_switch(esp);
+        case SYS_EXEC: {
+            u32 entry = noan_load((const char*)arg1);
+            if (entry) {
+                noan_execute(entry, (const char*)arg1);
+                return task_switch(esp);
+            } else {
+                ret = -1;
+            }
+            break;
+        }
+
         case SYS_PRINT:
             kprint((const char*)arg1);
             break;
         case SYS_READ:
             ret = keyboard_getchar();
+            if (ret == 0) {
+                process_t* current = get_current_process();
+                if (current) current->state = TASK_SLEEPING;
+                return task_switch(esp);
+            }
             break;
         case SYS_MALLOC:
             ret = (u32)kmalloc(arg1);
@@ -98,6 +134,9 @@ u32 syscall_handler(u32 esp) {
             break;
         case SYS_STAT:
             fat32_stat((const char*)arg1);
+            break;
+        case SYS_GET_TICKS:
+            ret = (int)timer_get_ticks();
             break;
         default:
             kprint("Unknown syscall: ");

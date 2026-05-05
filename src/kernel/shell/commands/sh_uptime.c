@@ -1,10 +1,9 @@
-#include "system/timer.h"
 #include "cpu/syscall.h"
 #include "shell/commands.h"
 
 int sh_uptime(int argc, char** argv) {
     (void)argc; (void)argv;
-    u32 ticks = timer_get_ticks();
+    u32 ticks = (u32)_syscall0(SYS_GET_TICKS);
     
     _syscall1(SYS_PRINT, (u32)"System Uptime: ");
     

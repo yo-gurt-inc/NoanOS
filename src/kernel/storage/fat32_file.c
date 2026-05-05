@@ -37,15 +37,17 @@ void fat32_cat(const char* name) {
         return;
     }
 
+    fat32_bpb_t* bpb = _fat32_get_bpb();
     u32 cluster = ((u32)entry.cluster_hi << 16) | entry.cluster_lo;
     u32 size = entry.file_size;
-    u16* buf = (u16*)kmalloc(512);
+    u16* buf = (u16*)kmalloc(bpb->sectors_per_cluster * 512);
     if (!buf) return;
 
     while (size > 0 && cluster < 0x0FFFFFF8) {
-        ata_read_sectors(drive, _fat32_cluster_to_lba(cluster), 1, buf);
+        ata_read_sectors(drive, _fat32_cluster_to_lba(cluster), bpb->sectors_per_cluster, buf);
         u8* b = (u8*)buf;
-        for (int i = 0; i < 512 && size > 0; i++) {
+        u32 cluster_bytes = bpb->sectors_per_cluster * 512;
+        for (u32 i = 0; i < cluster_bytes && size > 0; i++) {
             terminal_putchar(b[i]);
             size--;
         }
@@ -65,6 +67,7 @@ int fat32_read(const char* name, char* buffer, u32 max_len) {
     if (!_fat32_find_entry(name, &entry)) return -1;
     if (entry.attr & FAT_ATTR_DIRECTORY) return -1;
 
+    fat32_bpb_t* bpb = _fat32_get_bpb();
     u32 cluster = ((u32)entry.cluster_hi << 16) | entry.cluster_lo;
     u32 size = entry.file_size;
     if (size > max_len) size = max_len;
@@ -73,12 +76,21 @@ int fat32_read(const char* name, char* buffer, u32 max_len) {
     u16* buf = (u16*)kmalloc(512);
     if (!buf) return -1;
 
+    // Read sector by sector, following the FAT chain
     while (total_read < size && cluster < 0x0FFFFFF8 && cluster >= 2) {
-        ata_read_sectors(drive, _fat32_cluster_to_lba(cluster), 1, buf);
-        u8* b = (u8*)buf;
-        for (int i = 0; i < 512 && total_read < size; i++) {
-            buffer[total_read++] = (char)b[i];
+        // Each cluster may have multiple sectors - we need to read all of them
+        fat32_bpb_t* bpb = _fat32_get_bpb();
+        u32 sectors_per_cluster = bpb ? bpb->sectors_per_cluster : 1;
+        if (sectors_per_cluster == 0 || sectors_per_cluster > 128) sectors_per_cluster = 1;
+        
+        for (u32 sec = 0; sec < sectors_per_cluster && total_read < size; sec++) {
+            ata_read_sectors(drive, _fat32_cluster_to_lba(cluster) + sec, 1, buf);
+            u8* b = (u8*)buf;
+            for (int i = 0; i < 512 && total_read < size; i++) {
+                buffer[total_read++] = (char)b[i];
+            }
         }
+        
         cluster = _fat32_get_fat_entry(cluster);
     }
     
@@ -199,6 +211,7 @@ void fat32_copy(const char* src, const char* dest) {
         return;
     }
 
+    fat32_bpb_t* bpb = _fat32_get_bpb();
     u32 src_cluster = ((u32)entry.cluster_hi << 16) | entry.cluster_lo;
     u32 size = entry.file_size;
 
@@ -210,15 +223,16 @@ void fat32_copy(const char* src, const char* dest) {
     _fat32_set_fat_entry(dest_cluster, 0x0FFFFFFF);
     u32 first_dest_cluster = dest_cluster;
 
-    u16* buf = (u16*)kmalloc(512);
+    u16* buf = (u16*)kmalloc(bpb->sectors_per_cluster * 512);
     if (!buf) return;
 
     u32 remaining = size;
     while (remaining > 0 && src_cluster < 0x0FFFFFF8) {
-        ata_read_sectors(drive, _fat32_cluster_to_lba(src_cluster), 1, buf);
-        ata_write_sectors(drive, _fat32_cluster_to_lba(dest_cluster), 1, buf);
+        ata_read_sectors(drive, _fat32_cluster_to_lba(src_cluster), bpb->sectors_per_cluster, buf);
+        ata_write_sectors(drive, _fat32_cluster_to_lba(dest_cluster), bpb->sectors_per_cluster, buf);
         
-        remaining -= (remaining > 512) ? 512 : remaining;
+        u32 cluster_bytes = bpb->sectors_per_cluster * 512;
+        remaining -= (remaining > cluster_bytes) ? cluster_bytes : remaining;
         
         if (remaining > 0) {
             src_cluster = _fat32_get_fat_entry(src_cluster);

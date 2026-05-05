@@ -1,4 +1,5 @@
 #include "cpu/idt.h"
+#include "cpu/task.h"
 #include "io/io.h"
 #include "io/kprint.h"
 
@@ -157,13 +158,48 @@ void idt_init(void) {
 
 u32 isr_handler(u32 esp) {
     struct registers* r = (struct registers*)esp;
-    kprint("[FAULT #");
-    kprint_dec(r->int_no);
-    kprint("] at EIP=");
-    kprint_hex(r->eip);
-    kprint(" CS=");
-    kprint_hex(r->cs);
-    kprint("\n");
+    
+    // Check if fault came from user mode (CS = 0x1B for user, 0x08 for kernel)
+    int is_user_mode = (r->cs == 0x1B);
+    
+    if (is_user_mode) {
+        process_t* current = get_current_process();
+        
+        // Only kill once
+        if (current && current->state != TASK_TERMINATED) {
+            current->state = TASK_TERMINATED;
+
+            // Wake up parent if it's waiting
+            if (current->parent_id > 0) {
+                process_t* p = get_process_list();
+                process_t* start = p;
+                do {
+                    if (p->id == current->parent_id && p->state == TASK_WAITING) {
+                        p->state = TASK_READY;
+                        break;
+                    }
+                    p = p->next;
+                } while (p != start);
+            }
+        }
+        
+        // Force task switch right here in the exception handler
+        // This is the key fix: don't return to re-faulting process, 
+        // jump directly to the shell's context
+        u32 new_esp = task_switch(esp);
+        return new_esp;
+    } else {
+        // Kernel-mode fault is fatal
+        kprint("[FATAL FAULT #");
+        kprint_dec(r->int_no);
+        kprint("] at EIP=");
+        kprint_hex(r->eip);
+        kprint(" CS=");
+        kprint_hex(r->cs);
+        kprint("\n");
+        while(1);
+    }
+    
     return esp;
 }
 

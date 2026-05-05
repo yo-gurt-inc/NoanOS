@@ -30,6 +30,8 @@
 #define SYS_MEM_INFO  23
 #define SYS_LIST_DISKS 24
 #define SYS_STAT      25
+#define SYS_GET_TICKS 26
+#define SYS_EXEC      27
 
 void syscall_init(void);
 u32 syscall_handler(u32 esp);
