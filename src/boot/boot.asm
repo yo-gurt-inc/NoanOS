@@ -103,10 +103,6 @@ start:
     mov cx, initrd_sectors
     mov bx, initrd_segment
     call read_lba
-    mov al, 'I' ; Debug: Initrd read successfully
-    mov ah, 0x0E
-    int 0x10
-
     ; Verify Magic
     mov ax, initrd_segment
     mov es, ax
@@ -117,9 +113,6 @@ start:
 
 
 initrd_magic_ok:
-    mov al, 'C' ; Debug: Initrd magic check passed
-    mov ah, 0x0E
-    int 0x10
 
     ; Try to set a VBE linear framebuffer mode (mode 0x118 with linear framebuffer flag)
     ; Note: best-effort; BIOS may fail if mode unsupported.
