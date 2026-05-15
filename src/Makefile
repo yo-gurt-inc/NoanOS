@@ -22,7 +22,7 @@ BOOT_SRC   = $(BOOT_SRC_DIR)/boot.asm
 KERNEL_ASM = kernel.asm interrupts.asm
 KERNEL_C   = kernel/core/kernel.c kernel/core/malloc.c kernel/core/memory_map.c kernel/core/panic.c kernel/core/initrd.c kernel/core/installer.c \
              kernel/cpu/gdt.c kernel/cpu/idt.c kernel/cpu/task.c kernel/cpu/syscall.c \
-             kernel/io/kprint.c kernel/io/terminal.c kernel/io/keyboard.c \
+             kernel/io/kprint.c kernel/io/terminal.c kernel/io/keyboard.c kernel/io/framebuffer.c \
              kernel/storage/ata.c kernel/storage/fat32.c kernel/storage/fat32_dir.c kernel/storage/fat32_file.c kernel/storage/elf.c kernel/storage/noan.c \
              kernel/system/timer.c kernel/system/rtc.c kernel/system/power.c
 SH_C       = userspace/shell/shell.c \
