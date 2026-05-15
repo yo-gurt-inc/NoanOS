@@ -2,7 +2,7 @@
 #include "io/terminal.h"
 #include "cpu/idt.h"
 #include "io/keyboard.h"
-#include "shell/shell.h"
+
 #include "core/malloc.h"
 #include "storage/ata.h"
 #include "storage/fat32.h"

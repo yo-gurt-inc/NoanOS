@@ -25,13 +25,13 @@ KERNEL_C   = kernel/core/kernel.c kernel/core/malloc.c kernel/core/memory_map.c 
              kernel/io/kprint.c kernel/io/terminal.c kernel/io/keyboard.c \
              kernel/storage/ata.c kernel/storage/fat32.c kernel/storage/fat32_dir.c kernel/storage/fat32_file.c kernel/storage/elf.c kernel/storage/noan.c \
              kernel/system/timer.c kernel/system/rtc.c kernel/system/power.c
-SH_C       = kernel/shell/shell.c \
-             kernel/shell/commands/commands.c kernel/shell/commands/sh_uptime.c kernel/shell/commands/sh_ls.c kernel/shell/commands/sh_cd.c \
-             kernel/shell/commands/sh_pwd.c kernel/shell/commands/sh_mkdir.c kernel/shell/commands/sh_rm.c kernel/shell/commands/sh_cp.c \
-             kernel/shell/commands/sh_mv.c kernel/shell/commands/sh_touch.c kernel/shell/commands/sh_cat.c kernel/shell/commands/sh_echo.c \
-             kernel/shell/commands/sh_clear.c kernel/shell/commands/sh_help.c kernel/shell/commands/sh_reboot.c kernel/shell/commands/sh_shutdown.c \
-             kernel/shell/commands/sh_vim.c kernel/shell/commands/sh_panic.c kernel/shell/commands/sh_date.c kernel/shell/commands/sh_mem.c \
-             kernel/shell/commands/sh_disks.c kernel/shell/commands/sh_stat.c
+SH_C       = userspace/shell/shell.c \
+             userspace/shell/commands/commands.c userspace/shell/commands/sh_uptime.c userspace/shell/commands/sh_ls.c userspace/shell/commands/sh_cd.c \
+             userspace/shell/commands/sh_pwd.c userspace/shell/commands/sh_mkdir.c userspace/shell/commands/sh_rm.c userspace/shell/commands/sh_cp.c \
+             userspace/shell/commands/sh_mv.c userspace/shell/commands/sh_touch.c userspace/shell/commands/sh_cat.c userspace/shell/commands/sh_echo.c \
+             userspace/shell/commands/sh_clear.c userspace/shell/commands/sh_help.c userspace/shell/commands/sh_reboot.c userspace/shell/commands/sh_shutdown.c \
+             userspace/shell/commands/sh_vim.c userspace/shell/commands/sh_panic.c userspace/shell/commands/sh_date.c userspace/shell/commands/sh_mem.c \
+             userspace/shell/commands/sh_disks.c userspace/shell/commands/sh_stat.c
 
 # User sources
 USER_SRC  = $(wildcard $(USER_DIR)/*.c)
@@ -49,7 +49,7 @@ KERNEL_C_O   = $(addprefix $(BUILD_DIR)/,$(notdir $(KERNEL_C:.c=.o)))
 SH_C_O       = $(addprefix $(BUILD_DIR)/,$(notdir $(SH_C:.c=.o)))
 
 vpath %.asm $(BOOT_SRC_DIR)
-vpath %.c kernel/core kernel/cpu kernel/io kernel/storage kernel/system kernel/shell kernel/shell/commands
+vpath %.c kernel/core kernel/cpu kernel/io kernel/storage kernel/system userspace/shell userspace/shell/commands
 
 DISK_IMG = $(IMG_DIR)/disk.img
 HDD_IMG  = $(IMG_DIR)/hdd.img
@@ -83,7 +83,7 @@ $(BUILD_DIR)/%_asm.o: %.asm | $(BUILD_DIR)
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	$(eval CURRENT := $(shell echo $$(($(CURRENT)+1))))
 	@printf "\033[0;32m[%2d/$(TOTAL_FILES)]\033[0m Compiling \033[0;36m$(<F)\033[0m\n" $(CURRENT)
-	@$(CC) $(CFLAGS) -I kernel/include -c $< -o $@
+	@$(CC) $(CFLAGS) -I kernel/include -I userspace/include -c $< -o $@
 
 $(KERNEL_ELF): $(KERNEL_ASM_O) $(KERNEL_C_O)
 	@printf "\033[0;35m[LD]\033[0m Linking kernel...\n"
