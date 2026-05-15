@@ -130,7 +130,8 @@ initrd_magic_ok:
     ; Request Mode Info for mode 0x118 into 0x9000 (ModeInfoBlock)
     mov cx, 0x0118
     mov ax, 0x4F01
-    mov es, 0x0000
+    mov ax, 0x0000
+    mov es, ax
     mov di, 0x9000
     int 0x10
 
