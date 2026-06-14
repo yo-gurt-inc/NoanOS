@@ -48,13 +48,10 @@ u32 syscall_handler(u32 esp) {
         case SYS_EXEC: {
             u32 entry = noan_load((const char*)arg1);
             if (entry) {
-                /* Ensure keyboard is enabled for the newly started process. If the
-                 * parent disabled keyboard around command execution, the child
-                 * must still receive input. */
                 keyboard_set_enabled(1);
                 noan_execute(entry, (const char*)arg1);
-                ret = 0;  // Return success (0)
-                // Fall through to normal return path which will set EAX then task_switch
+                keyboard_flush();
+                ret = 0;
             } else {
                 ret = -1;
             }

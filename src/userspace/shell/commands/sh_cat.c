@@ -1,11 +1,8 @@
-#include "cpu/syscall.h"
+#include "shell/noan.h"
 #include "shell/commands.h"
 
 int sh_cat(int argc, char** argv) {
-    if (argc < 2) {
-        _syscall1(SYS_PRINT, (u32)"Usage: cat <name>\n");
-        return 1;
-    }
-    _syscall1(SYS_CAT, (u32)argv[1]);
+    if (argc < 2) { noan_print("Usage: cat <name>\n"); return 1; }
+    noan_cat(argv[1]);
     return 0;
 }

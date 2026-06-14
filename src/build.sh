@@ -6,7 +6,7 @@ echo "Building NoanOS with Initrd Support..."
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 make -C "$SCRIPT_DIR" clean
-make -C "$SCRIPT_DIR" -j4
+make -C "$SCRIPT_DIR" -j8
 
 INITRD_SRC="$SCRIPT_DIR/build/obj/initrd.bin"
 

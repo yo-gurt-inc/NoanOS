@@ -1,169 +1,111 @@
-#include "cpu/syscall.h"
+#include "shell/noan.h"
 #include "shell/commands.h"
-#include "core/types.h"
 
 #define EDITOR_MAX_SIZE 4096
-#define EDITOR_WIDTH 80
-#define EDITOR_HEIGHT 24
+#define EDITOR_WIDTH    80
+#define EDITOR_HEIGHT   24
 
 static char text_buffer[EDITOR_MAX_SIZE];
-static int cursor_x = 0;
-static int cursor_y = 0;
-static int text_len = 0;
-static int viewport_line = 0;
-
-static void editor_print(const char* s) {
-    _syscall1(SYS_PRINT, (u32)s);
-}
-
-static void editor_putchar(char c) {
-    _syscall1(SYS_PUTCHAR, (u32)c);
-}
+static int cursor_x = 0, cursor_y = 0, text_len = 0, viewport_line = 0;
 
 static void update_screen_cursor(void) {
-    // ANSI: \033[y;xH (1-indexed)
-    editor_print("\033[");
-    
-    int display_y = cursor_y - viewport_line + 1;
-    if (display_y >= 10) { editor_putchar('0' + (display_y/10)); editor_putchar('0' + (display_y%10)); }
-    else editor_putchar('0' + display_y);
-    
-    editor_putchar(';');
-    
+    noan_print("\033[");
+    int y = cursor_y - viewport_line + 1;
+    if (y >= 10) { noan_putchar('0' + y/10); noan_putchar('0' + y%10); } else noan_putchar('0' + y);
+    noan_putchar(';');
     int x = cursor_x + 1;
-    if (x >= 10) { editor_putchar('0' + (x/10)); editor_putchar('0' + (x%10)); }
-    else editor_putchar('0' + x);
-    
-    editor_putchar('H');
+    if (x >= 10) { noan_putchar('0' + x/10); noan_putchar('0' + x%10); } else noan_putchar('0' + x);
+    noan_putchar('H');
 }
 
 static void refresh_screen(void) {
-    _syscall0(SYS_CLEAR);
-    editor_print("--- VIM LITE - Ctrl+S: Save, Ctrl+Q: Quit ---\n");
-    
-    int current_line = 0;
-    int display_line = 0;
-    
-    for (int i = 0; i < text_len && display_line < EDITOR_HEIGHT - 1; i++) {
-        if (current_line >= viewport_line && current_line < viewport_line + EDITOR_HEIGHT - 1) {
-            editor_putchar(text_buffer[i]);
-            if (text_buffer[i] == '\n') {
-                display_line++;
-                current_line++;
-            }
+    noan_clear();
+    noan_print("--- VIM LITE - Ctrl+S: Save, Ctrl+Q: Quit ---\n");
+    int cur_line = 0, disp_line = 0;
+    for (int i = 0; i < text_len && disp_line < EDITOR_HEIGHT - 1; i++) {
+        if (cur_line >= viewport_line && cur_line < viewport_line + EDITOR_HEIGHT - 1) {
+            noan_putchar(text_buffer[i]);
+            if (text_buffer[i] == '\n') { disp_line++; cur_line++; }
         } else {
-            if (text_buffer[i] == '\n') {
-                current_line++;
-            }
+            if (text_buffer[i] == '\n') cur_line++;
         }
     }
     update_screen_cursor();
 }
 
+static int editor_read(void) {
+    int c = 0;
+    while ((c = noan_getchar()) == 0) noan_yield();
+    return c;
+}
+
 int sh_vim(int argc, char** argv) {
     const char* filename = (argc > 1) ? argv[1] : "newfile.txt";
-    
-    for(int i=0; i<EDITOR_MAX_SIZE; i++) text_buffer[i] = 0;
-    text_len = 0;
-    cursor_x = 0;
-    cursor_y = 1; // Row 0 is header
+    for (int i = 0; i < EDITOR_MAX_SIZE; i++) text_buffer[i] = 0;
+    text_len = 0; cursor_x = 0; cursor_y = 1; viewport_line = 0;
 
-    // Try to load file
-    int read_bytes = _syscall3(SYS_READ_FILE, (u32)filename, (u32)text_buffer, EDITOR_MAX_SIZE - 1);
-    if (read_bytes > 0) {
-        text_len = read_bytes;
-        text_buffer[text_len] = '\0';
-        
-        cursor_x = 0;
-        cursor_y = 1;
-        viewport_line = 0;
-    }
+    int n = noan_read_file(filename, text_buffer, EDITOR_MAX_SIZE - 1);
+    if (n > 0) { text_len = n; text_buffer[n] = '\0'; }
 
     refresh_screen();
 
     while (1) {
-        int c = 0;
-        while ((c = _syscall0(SYS_READ)) == 0) _syscall0(SYS_YIELD);
+        int c = editor_read();
 
         if (c == 17) { // Ctrl+Q
-            _syscall0(SYS_CLEAR);
+            noan_clear();
             return 0;
         } else if (c == 19) { // Ctrl+S
-            _syscall2(SYS_RM, (u32)filename, 0);
-            _syscall3(SYS_ECHO_FILE, (u32)filename, (u32)text_buffer, 0);
-            editor_print("\nSaved to "); editor_print(filename);
-            _syscall0(SYS_YIELD);
+            noan_rm(filename, 1);
+            noan_write_file(filename, text_buffer, 0);
+            noan_print("\nSaved to "); noan_print(filename);
+            noan_yield();
             refresh_screen();
-        } else if (c == '\033') { // Escape sequence
-            c = _syscall0(SYS_READ);
-            if (c == '[') {
-                c = _syscall0(SYS_READ);
-                if (c == 'A') { // Up
-                    if (cursor_y > 1) {
-                        cursor_y--;
-                        if (cursor_y - viewport_line < 1) viewport_line--;
-                        refresh_screen();
-                    }
-                } else if (c == 'B') { // Down
-                    int total_lines = 1;
-                    for (int i = 0; i < text_len; i++) {
-                        if (text_buffer[i] == '\n') total_lines++;
-                    }
-                    if (cursor_y < total_lines) {
+        } else if (c == '\033') {
+            int c2 = editor_read();
+            if (c2 == '[') {
+                int c3 = editor_read();
+                if (c3 == 'A' && cursor_y > 1) {
+                    cursor_y--;
+                    if (cursor_y - viewport_line < 1) viewport_line--;
+                    refresh_screen();
+                } else if (c3 == 'B') {
+                    int lines = 1;
+                    for (int i = 0; i < text_len; i++) if (text_buffer[i] == '\n') lines++;
+                    if (cursor_y < lines) {
                         cursor_y++;
                         if (cursor_y - viewport_line >= EDITOR_HEIGHT - 1) viewport_line++;
                         refresh_screen();
                     }
-                } else if (c == 'C') { // Right
-                    if (cursor_x < EDITOR_WIDTH - 1) {
-                        cursor_x++;
-                        update_screen_cursor();
-                    }
-                } else if (c == 'D') { // Left
-                    if (cursor_x > 0) {
-                        cursor_x--;
-                        update_screen_cursor();
-                    }
+                } else if (c3 == 'C' && cursor_x < EDITOR_WIDTH - 1) {
+                    cursor_x++; update_screen_cursor();
+                } else if (c3 == 'D' && cursor_x > 0) {
+                    cursor_x--; update_screen_cursor();
                 }
             }
         } else if (c == '\b') {
             if (text_len > 0) {
-                text_len--;
-                text_buffer[text_len] = '\0';
-                
-                cursor_x = 0;
-                cursor_y = 1;
-                viewport_line = 0;
-                for(int i=0; i<text_len; i++) {
-                    if(text_buffer[i] == '\n') {
-                        cursor_y++;
-                        cursor_x = 0;
-                    } else {
-                        cursor_x++;
-                        if(cursor_x >= EDITOR_WIDTH) {
-                            cursor_x = 0;
-                            cursor_y++;
-                        }
-                    }
+                text_buffer[--text_len] = '\0';
+                cursor_x = 0; cursor_y = 1; viewport_line = 0;
+                for (int i = 0; i < text_len; i++) {
+                    if (text_buffer[i] == '\n') { cursor_y++; cursor_x = 0; }
+                    else if (++cursor_x >= EDITOR_WIDTH) { cursor_x = 0; cursor_y++; }
                 }
                 refresh_screen();
             }
         } else if (c == '\n' || c == '\r') {
             if (text_len < EDITOR_MAX_SIZE - 1) {
                 text_buffer[text_len++] = '\n';
-                cursor_x = 0;
-                cursor_y++;
+                cursor_x = 0; cursor_y++;
                 if (cursor_y - viewport_line >= EDITOR_HEIGHT - 1) viewport_line++;
                 refresh_screen();
             }
         } else if (c >= 32 && c < 127) {
             if (text_len < EDITOR_MAX_SIZE - 1) {
                 text_buffer[text_len++] = (char)c;
-                editor_putchar(c);
-                cursor_x++;
-                if (cursor_x >= EDITOR_WIDTH) {
-                    cursor_x = 0;
-                    cursor_y++;
+                noan_putchar(c);
+                if (++cursor_x >= EDITOR_WIDTH) {
+                    cursor_x = 0; cursor_y++;
                     if (cursor_y - viewport_line >= EDITOR_HEIGHT - 1) viewport_line++;
                 }
             }

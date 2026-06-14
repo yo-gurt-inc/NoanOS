@@ -10,14 +10,7 @@
 #include "core/initrd.h"
 
 // Forward declarations for FAT32 internal helpers needed for installation
-extern void _fat32_create_entry(const char* name, u8 attr, u32 first_cluster, u32 size);
-extern u32 _fat32_find_free_cluster(void);
-extern void _fat32_set_fat_entry(u32 cluster, u32 value);
-extern u32 _fat32_cluster_to_lba(u32 cluster);
-extern ata_drive_t* _fat32_get_current_drive(void);
-extern int _fat32_find_entry(const char* name, void* out_entry);
-extern void _fat32_set_current_dir_cluster(u32 c);
-extern fat32_bpb_t* _fat32_get_bpb(void);
+// (all now declared in storage/fat32.h)
 
 static void install_file(const char* name, void* data, u32 size) {
     u32 sectors = (size + 511) / 512;
@@ -50,9 +43,7 @@ static void install_file(const char* name, void* data, u32 size) {
 
 static char wait_for_key(void) {
     char c = 0;
-    while (!(c = keyboard_getchar())) {
-        asm volatile("hlt");
-    }
+    while (!(c = keyboard_getchar()));
     return c;
 }
 

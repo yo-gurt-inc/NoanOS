@@ -176,6 +176,12 @@ int keyboard_getchar(void) {
 
 void keyboard_flush(void) {
     buffer_tail = buffer_head;
+    /* Reset modifier state — a flush marks a context boundary where held
+     * modifiers from the previous context (e.g. Ctrl held during Ctrl+Q)
+     * must not bleed into the next context. */
+    shift_held = 0;
+    ctrl_held = 0;
+    shift_sticky = 0;
 }
 
 void keyboard_set_enabled(int enabled) {

@@ -5,9 +5,10 @@
 static fb_info_t fb;
 
 static int valid_vbe_modeinfo(void) {
-    /* Validate the ModeInfoBlock at 0x9000: signature should be 'VESA' */
-    u32 sig = *(u32*)0x9000; /* little-endian 'VESA' */
-    return (sig == 0x41534556); /* 'V' 'E' 'S' 'A' */
+    /* ModeInfoBlock has no magic. Check ModeAttributes (offset 0x00, u16):
+     * bit 0 = mode supported, bit 7 = linear framebuffer available. */
+    u16 attrs = *(u16*)0x9000;
+    return ((attrs & 0x81) == 0x81);
 }
 
 void fb_init(void) {

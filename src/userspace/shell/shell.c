@@ -1,16 +1,15 @@
-#include "cpu/syscall.h"
-#include "core/types.h"
+#include "shell/noan.h"
 #include "shell/commands.h"
 
 void shell_main(void);
 
 void _start(void) {
     shell_main();
-    _syscall0(SYS_EXIT);
+    noan_exit();
 }
 
-#define shell_print(s) _syscall1(SYS_PRINT, (u32)(s))
-#define shell_putchar(c) _syscall1(SYS_PUTCHAR, (u32)(c))
+#define shell_print(s) noan_print(s)
+#define shell_putchar(c) noan_putchar(c)
 
 char current_path[256] = "/";
 
@@ -44,17 +43,17 @@ static size_t strlen(const char* s) {
 
 static int shell_getchar(void) {
     int c;
-    while ((c = _syscall0(SYS_READ)) == 0);
+    while ((c = noan_getchar()) == 0);
     return c;
 }
 
 static void load_history(void) {
-    char* buf = (char*)_syscall1(SYS_MALLOC, 4096);
+    char* buf = (char*)(noan_malloc(4096));
     if (!buf) return;
 
-    int bytes = _syscall3(SYS_READ_FILE, (u32)history_file, (u32)buf, 4095);
+    int bytes = noan_read_file(history_file, buf, 4095);
     if (bytes <= 0) {
-        _syscall1(SYS_FREE, (u32)buf);
+        noan_free(buf);
         return;
     }
     buf[bytes] = '\0';
@@ -71,11 +70,11 @@ static void load_history(void) {
         if (end_char != '\0') p++;
         while (*p && (*p == '\n' || *p == '\r')) p++;
     }
-    _syscall1(SYS_FREE, (u32)buf);
+    noan_free(buf);
 }
 
 static void save_history(void) {
-    char* buf = (char*)_syscall1(SYS_MALLOC, 4096);
+    char* buf = (char*)(noan_malloc(4096));
     if (!buf) return;
 
     buf[0] = '\0';
@@ -83,9 +82,9 @@ static void save_history(void) {
         strcat(buf, history[i]);
         strcat(buf, "\n");
     }
-    _syscall2(SYS_RM, (u32)history_file, 1);
-    _syscall3(SYS_ECHO_FILE, (u32)history_file, (u32)buf, 1);
-    _syscall1(SYS_FREE, (u32)buf);
+    noan_rm(history_file, 1);
+    noan_write_file(history_file, buf, 1);
+    noan_free(buf);
 }
 
 static void add_history(const char* cmd) {
@@ -123,10 +122,8 @@ void shell_main(void) {
             cmd[len] = '\0';
             
             if (len > 0) {
-                _syscall1(SYS_KB_ENABLE, 0);
                 execute_commands(cmd);
-                _syscall1(SYS_KB_ENABLE, 1);
-                add_history(cmd);  /* after execution so slow write doesn't block input */
+                add_history(cmd);
                 history_index = -1;
             }
 

@@ -1,4 +1,4 @@
-#include "cpu/syscall.h"
+#include "shell/noan.h"
 #include "shell/commands.h"
 
 extern shell_command_t commands[];
@@ -6,13 +6,13 @@ extern int num_commands;
 
 int sh_help(int argc, char** argv) {
     (void)argc; (void)argv;
-    _syscall1(SYS_PRINT, (u32)"Available commands:\n");
+    noan_print("Available commands:\n");
     for (int i = 0; i < num_commands; i++) {
-        _syscall1(SYS_PRINT, (u32)"  ");
-        _syscall1(SYS_PRINT, (u32)commands[i].name);
-        _syscall1(SYS_PRINT, (u32)" - ");
-        _syscall1(SYS_PRINT, (u32)commands[i].help);
-        _syscall1(SYS_PUTCHAR, '\n');
+        noan_print("  ");
+        noan_print(commands[i].name);
+        noan_print(" - ");
+        noan_print(commands[i].help);
+        noan_putchar('\n');
     }
     return 0;
 }

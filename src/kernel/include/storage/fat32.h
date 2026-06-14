@@ -75,4 +75,20 @@ void fat32_copy(const char* src, const char* dest);
 void fat32_move(const char* src, const char* dest);
 int fat32_read(const char* name, char* buffer, u32 max_len);
 
+/* Internal accessors shared across fat32_*.c modules */
+u32          _fat32_get_fat_start(void);
+u32          _fat32_get_data_start(void);
+u32          _fat32_get_current_dir_cluster(void);
+void         _fat32_set_current_dir_cluster(u32 c);
+ata_drive_t* _fat32_get_current_drive(void);
+fat32_bpb_t* _fat32_get_bpb(void);
+u32          _fat32_cluster_to_lba(u32 cluster);
+u32          _fat32_get_fat_entry(u32 cluster);
+void         _fat32_set_fat_entry(u32 cluster, u32 value);
+u32          _fat32_find_free_cluster(void);
+void         _fat32_name_to_83(const char* name, u8* dest);
+int          _fat32_find_entry(const char* name, fat32_dir_entry_t* out_entry);
+void         _fat32_create_entry(const char* name, u8 attr, u32 first_cluster, u32 size);
+int          _fat32_find_full_path_file(const char* path, fat32_dir_entry_t* out_entry);
+
 #endif

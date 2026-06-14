@@ -1,18 +1,8 @@
-// ============================================================================
-// fat32_file.c - FAT32 File Operations (Part 3 of 3)
-// ============================================================================
-// Contains: cat, read, echo, touch, rm, copy, move, stat operations.
-// Uses module-internal helpers (_fat32_*) from fat32.c which are linked together.
-// ============================================================================
-
+// fat32_file.c - FAT32 File Operations: cat, read, echo, touch, rm, copy, move, stat
 #include "storage/fat32.h"
 #include "io/kprint.h"
 #include "io/terminal.h"
 #include "core/malloc.h"
-
-// Module helpers from fat32.c
-extern u32 _fat32_cluster_to_lba(u32 cluster);
-extern void _fat32_name_to_83(const char* name, u8* dest);
 extern int _fat32_find_entry(const char* name, fat32_dir_entry_t* out_entry);
 extern u32 _fat32_get_fat_entry(u32 cluster);
 extern u32 _fat32_find_free_cluster(void);

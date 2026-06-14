@@ -1,18 +1,8 @@
-// ============================================================================
-// fat32_dir.c - FAT32 Directory Operations (Part 2 of 3)
-// ============================================================================
-// Contains: ls, cd, mkdir operations.
-// Uses module-internal helpers (_fat32_*) from fat32.c which are linked together.
-// ============================================================================
-
+// fat32_dir.c - FAT32 Directory Operations: ls, cd, mkdir
 #include "storage/fat32.h"
 #include "io/kprint.h"
 #include "io/terminal.h"
 #include "core/malloc.h"
-
-// Module helpers from fat32.c
-extern u32 _fat32_cluster_to_lba(u32 cluster);
-extern void _fat32_name_to_83(const char* name, u8* dest);
 extern int _fat32_find_entry(const char* name, fat32_dir_entry_t* out_entry);
 extern u32 _fat32_get_current_dir_cluster(void);
 extern void _fat32_set_current_dir_cluster(u32 c);
