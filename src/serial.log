@@ -10,6 +10,11 @@
 [kernel] ata OK
 [kernel] sti OK
 [kernel] initrd OK
+[kernel] drive_idx=0
+[kernel] boot_disk=1 exists=1
+[kernel] reading sector 255
+[kernel] sector 255 read OK
+[kernel] is_live=1
 [kernel] boot drive=129
 [kernel] malloc OK
 [kernel] gdt OK
@@ -22,3 +27,17 @@
 [kernel] ata OK
 [kernel] sti OK
 [kernel] initrd OK
+[kernel] drive_idx=1
+[kernel] boot_disk=1 exists=1
+[kernel] reading sector 255
+[kernel] sector 255 read OK
+[kernel] is_live=0
+[kernel] fat32_init
+[kernel] fat32_init OK
+[kernel] noan_load shell
+[kernel] noan_load result=8388608
+[kernel] shell_entry=8388608
+[kernel] task_create
+[kernel] task_yield
+[kernel] back from yield
+[write fd=0 count=2117620 buf=0x00000000]

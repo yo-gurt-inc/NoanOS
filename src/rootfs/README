@@ -1,0 +1,10 @@
+Drop files here to have them copied onto the HDD image at build time.
+
+Structure mirrors the FAT32 filesystem:
+  rootfs/          → / (root)
+  rootfs/bin/      → /bin/
+
+Example — compile a musl program and drop it in:
+  /root/NoanOS/musl-noan-cc hello.c -o rootfs/bin/hello
+
+Then run build.sh and the binary will be on the HDD, runnable from the shell.

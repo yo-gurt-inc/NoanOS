@@ -95,6 +95,7 @@ int execute_command(const char* cmd_line) {
     }
 
     if (noan_exec(cmd_line) == 0) { ret = 0; goto done; }
+    if (noan_exec_elf(argv[0]) >= 0) { ret = 0; goto done; }
 
     noan_print("Unknown command: ");
     noan_print(argv[0]);

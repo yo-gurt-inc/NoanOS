@@ -94,6 +94,14 @@ process_t* task_create(void* entry, u32 flags, int parent_id) {
     /* Give this process its own page directory (inherits kernel mapping) */
     proc->page_dir = paging_new_dir();
 
+    /* Init fd table: fd 0=stdin, 1=stdout, 2=stderr */
+    for (int f = 0; f < MAX_FDS; f++) proc->fds[f].kind = FD_FREE;
+    proc->fds[0].kind = FD_STDIN;
+    proc->fds[1].kind = FD_STDOUT;
+    proc->fds[2].kind = FD_STDERR;
+    proc->brk_end = 0; /* set by ELF loader after loading segments */
+    proc->is_elf  = 0; /* native ABI by default */
+
     // Add to list
     proc->next = process_list->next;
     process_list->next = proc;

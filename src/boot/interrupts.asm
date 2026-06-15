@@ -96,7 +96,7 @@ common_stub:
     mov ds, ax
     mov es, ax
     mov fs, ax
-    mov gs, ax
+    ; Do NOT touch %gs — it holds the musl TLS selector for user processes
 
     push esp            ; Pass pointer to registers struct as Argument 1
     
@@ -125,7 +125,7 @@ common_stub:
     mov ds, ax
     mov es, ax
     mov fs, ax
-    mov gs, ax
+    ; Do NOT restore %gs — leave it as musl set it (TLS selector 0x33)
 
     popa
     add esp, 8          ; Clean up int_no and err_code

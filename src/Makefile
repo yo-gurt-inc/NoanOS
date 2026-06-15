@@ -12,6 +12,19 @@ BOOT_SRC_DIR = boot
 USER_DIR     = user
 TOOLS_DIR    = tools
 
+# musl-linked ELF programs (drop .c files in rootfs_src/)
+MUSL         = /root/NoanOS/musl-noan
+MUSL_CC      = $(CC) -m32 -march=i686 -static -nostdlib \
+               -I$(MUSL)/include -Wl,-Ttext-segment=0x200000 \
+               $(MUSL)/lib/crt1.o $(MUSL)/lib/crti.o
+MUSL_LIBS    = $(MUSL)/lib/libc.a $(MUSL)/lib/crtn.o -lgcc -lgcc_eh
+ROOTFS_SRCS   = $(wildcard rootfs_src/*.c)
+ROOTFS_BINS   = $(patsubst rootfs_src/%.c,rootfs/bin/%,$(ROOTFS_SRCS))
+NOSTDLIB_SRCS = $(wildcard rootfs_src/nostdlib/*.c)
+NOSTDLIB_BINS = $(patsubst rootfs_src/nostdlib/%.c,rootfs/bin/%,$(NOSTDLIB_SRCS))
+NOSTDLIB_SRCS = $(wildcard rootfs_src/nostdlib/*.c)
+NOSTDLIB_BINS = $(patsubst rootfs_src/nostdlib/%.c,rootfs/bin/%,$(NOSTDLIB_SRCS))
+
 # Flags
 CFLAGS   = -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -march=i686 -fno-pie -fno-stack-protector -nostdlib -nostartfiles
 LDFLAGS  = -T $(BOOT_SRC_DIR)/linker.ld --oformat elf32-i386 -m elf_i386
@@ -100,7 +113,20 @@ $(BIN_DIR)/%: $(USER_DIR)/%.c | $(BIN_DIR) $(BUILD_DIR)
 	@$(LD) -Ttext 0xA00000 --entry _start --oformat binary -m elf_i386 $(BUILD_DIR)/$*.o -o $(BUILD_DIR)/$*.flat
 	@python3 $(TOOLS_DIR)/mknoan.py $(BUILD_DIR)/$*.flat $(BIN_DIR)/$*
 
-$(INITRD_BIN): $(SH_C_O) $(USER_BINS) | $(BUILD_DIR)
+rootfs/bin:
+	@mkdir -p rootfs/bin
+
+rootfs/bin/%: rootfs_src/%.c | rootfs/bin
+	@printf "\033[0;36m[MUSL]\033[0m Compiling \033[0;36m$*\033[0m\n"
+	@$(MUSL_CC) $< $(MUSL_LIBS) -o $@
+
+rootfs/bin/%: rootfs_src/nostdlib/%.c | rootfs/bin
+	@printf "\033[0;36m[ELF]\033[0m Compiling \033[0;36m$*\033[0m\n"
+	@$(CC) -m32 -march=i686 -static -nostdlib -nostartfiles \
+		-Wl,-Ttext-segment=0x200000 $< -o $@
+ROOTFS_FILES = $(shell find rootfs -type f 2>/dev/null | grep -v README)
+
+$(INITRD_BIN): $(SH_C_O) $(USER_BINS) $(ROOTFS_FILES) $(ROOTFS_BINS) $(NOSTDLIB_BINS) | $(BUILD_DIR)
 	@printf "\033[0;35m[LD]\033[0m Linking shell...\n"
 	@$(LD) -Ttext 0x800000 --entry _start --oformat binary -m elf_i386 $(SH_C_O) -o $(BUILD_DIR)/shell.bin
 	@printf "\033[0;33m[INITRD]\033[0m Creating Noan Archive (NARC)...\n"
@@ -117,7 +143,29 @@ $(DISK_IMG): $(BOOT_BIN) $(KERNEL_BIN) $(INITRD_BIN) | $(IMG_DIR)
 
 $(HDD_IMG): | $(IMG_DIR)
 	@printf "\033[0;33m[IMG]\033[0m Creating blank HDD image...\n"
-	@dd if=/dev/zero of=$(HDD_IMG) bs=1M count=10 2>/dev/null
+	@dd if=/dev/zero of=$(HDD_IMG) bs=512 count=20480 2>/dev/null
+	@printf "\033[0;33m[IMG]\033[0m Formatting HDD as FAT32...\n"
+	@MTOOLSRC=/dev/null mformat -i $(HDD_IMG) \
+		-v "SIMPLE OS " \
+		-N 12345678 \
+		-R 128 \
+		-L 160 \
+		-c 8 \
+		-F ::
+	@python3 -c "import struct; f=open('$(HDD_IMG)','r+b'); f.seek(510); f.write(b'\x00\x00'); f.close()"
+	@printf "\033[0;33m[IMG]\033[0m Populating HDD from rootfs/...\n"
+	@if [ -d rootfs ]; then \
+		find rootfs -mindepth 1 -type d | sort | while read dir; do \
+			fat_path=$$(echo "$$dir" | sed 's|^rootfs||'); \
+			MTOOLSRC=/dev/null mmd -i $(HDD_IMG) "::$$fat_path" 2>/dev/null || true; \
+		done; \
+		find rootfs -type f ! -name 'README' | while read f; do \
+			fat_path=$$(echo "$$f" | sed 's|^rootfs||'); \
+			MTOOLSRC=/dev/null mcopy -i $(HDD_IMG) "$$f" "::$$fat_path" && \
+			printf "  \033[0;36m%s\033[0m\n" "$$fat_path" || \
+			printf "  \033[0;31mFailed:\033[0m $$f\n"; \
+		done; \
+	fi
 
 run: $(DISK_IMG) $(HDD_IMG)
 	pkill -f "qemu-system-i[3]86" || true

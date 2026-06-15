@@ -1,7 +1,7 @@
 #include "cpu/gdt.h"
 #include "io/kprint.h"
 
-struct gdt_entry gdt[6];
+struct gdt_entry gdt[7];
 struct gdt_ptr gdt_p;
 struct tss_entry tss;
 
@@ -42,7 +42,7 @@ void tss_set_stack(u32 stack) {
 }
 
 void gdt_init(void) {
-    gdt_p.limit = (sizeof(struct gdt_entry) * 6) - 1;
+    gdt_p.limit = (sizeof(struct gdt_entry) * 7) - 1;
     gdt_p.base  = (u32)&gdt;
 
     gdt_set_gate(0, 0, 0, 0, 0);                // Null segment
@@ -51,7 +51,16 @@ void gdt_init(void) {
     gdt_set_gate(3, 0, 0xFFFFFFFF, 0xFA, 0xCF); // User mode code segment (Ring 3)
     gdt_set_gate(4, 0, 0xFFFFFFFF, 0xF2, 0xCF); // User mode data segment (Ring 3)
     write_tss(5, 0x10, 0x0);                    // TSS
+    gdt_set_gate(6, 0, 0xFFFFF, 0xF2, 0xCF);   // TLS (%gs) slot for musl — base set per-process
 
     gdt_flush((u32)&gdt_p);
     tss_flush();
+}
+
+/* Called from set_thread_area syscall (243) — sets the base of GDT[6] (%gs).
+ * musl passes a struct user_desc*; we only need the base_addr field (offset 4). */
+void gdt_set_tls(u32 base) {
+    gdt_set_gate(6, base, 0xFFFFF, 0xF2, 0xCF);
+    /* Reload GDTR so the CPU sees the updated descriptor */
+    asm volatile("lgdt %0" :: "m"(gdt_p));
 }

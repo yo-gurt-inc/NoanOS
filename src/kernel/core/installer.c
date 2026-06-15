@@ -163,13 +163,27 @@ int installer_start(u32 boot_drive) {
                 void* data = initrd_get_file(i, name, &size);
                 if (data) {
                     char fullpath[64];
-                    fullpath[0] = '/'; fullpath[1] = 'b'; fullpath[2] = 'i'; fullpath[3] = 'n'; fullpath[4] = '/';
-                    int k = 0;
-                    while(name[k] && k < 32) { fullpath[k+5] = name[k]; k++; }
-                    fullpath[k+5] = '\0';
+                    int is_elf_file = (name[0] == '/'); // rootfs ELF files stored with full path
+                    if (is_elf_file) {
+                        // Use path as-is, create parent dir if needed
+                        int k = 0;
+                        while(name[k] && k < 63) { fullpath[k] = name[k]; k++; }
+                        fullpath[k] = '\0';
+                        // Ensure parent directory exists (simple: handle /bin/ only for now)
+                        fat32_mkdir("/bin");
+                    } else {
+                        fullpath[0] = '/'; fullpath[1] = 'b'; fullpath[2] = 'i'; fullpath[3] = 'n'; fullpath[4] = '/';
+                        int k = 0;
+                        while(name[k] && k < 32) { fullpath[k+5] = name[k]; k++; }
+                        fullpath[k+5] = '\0';
+                    }
                     
                     kprint("  Installing "); kprint(fullpath); kprint("...\n");
 
+                    if (is_elf_file) {
+                        // ELF binary — write raw, no NOAN header
+                        install_file(fullpath, data, size);
+                    } else {
                     // Wrap all binaries (shell and user commands) into NOAN format
                     u32 magic = 0x4E4F414E; // 'NOAN'
                     u32 entry_off = 16;
@@ -200,6 +214,7 @@ int installer_start(u32 boot_drive) {
                     } else {
                         install_file(fullpath, data, size);
                     }
+                    } // end !is_elf_file
                 }
             }
 

@@ -3,6 +3,8 @@
 
 #include "core/types.h"
 
+#define PT_LOAD  1
+
 typedef struct {
     u8  e_ident[16];
     u16 e_type;
@@ -31,6 +33,11 @@ typedef struct {
     u32 p_align;
 } __attribute__((packed)) elf_ph_t;
 
-int elf_load(const char* filename);
+/* Forward declare to avoid circular include with task.h */
+struct process;
+
+/* Loads an ELF32 binary from FAT32, maps segments, creates a Ring-3 task.
+   Returns the new process_t* or NULL on failure. */
+struct process* elf_load_file(const char* path);
 
 #endif

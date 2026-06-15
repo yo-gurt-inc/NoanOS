@@ -11,7 +11,7 @@ page_dir_t* kernel_page_dir = &kernel_dir;
 /* Identity-map the first IDENTITY_MB with 4MB PSE pages.
  * Must cover: BIOS/VGA (0), kernel (1MB), initrd (2MB),
  *             malloc heap (4MB), shell (8MB), user progs (10MB). */
-#define IDENTITY_4MB_ENTRIES 4   /* 0–4MB, 4–8MB, 8–12MB, 12–16MB = 16MB */
+#define IDENTITY_4MB_ENTRIES 64  /* 0–256MB, covers standard Linux load addr 0x08048000 */
 
 static void fill_kernel_map(page_dir_t* dir) {
     for (u32 i = 0; i < IDENTITY_4MB_ENTRIES; i++) {

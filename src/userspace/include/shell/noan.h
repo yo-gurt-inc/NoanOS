@@ -17,7 +17,8 @@ static inline void noan_flush_kb(void)          { _syscall0(SYS_FLUSH_KB); }
 /* Process */
 static inline void noan_exit(void)              { _syscall0(SYS_EXIT); }
 static inline void noan_yield(void)             { _syscall0(SYS_YIELD); }
-static inline int  noan_exec(const char* path)  { return _syscall1(SYS_EXEC, (u32)path); }
+static inline int  noan_exec(const char* path)  { return _syscall1(SYS_EXEC,     (u32)path); }
+static inline int  noan_exec_elf(const char* path) { return _syscall1(SYS_EXEC_ELF, (u32)path); }
 static inline void noan_panic(const char* msg)  { _syscall1(SYS_PANIC, (u32)msg); }
 
 /* Memory */

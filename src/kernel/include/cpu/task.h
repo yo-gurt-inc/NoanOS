@@ -7,6 +7,21 @@
 
 #define MAX_PROCESSES 16
 #define STACK_SIZE 4096
+#define MAX_FDS 16
+
+/* File descriptor kinds */
+#define FD_FREE    0
+#define FD_STDIN   1
+#define FD_STDOUT  2
+#define FD_STDERR  3
+#define FD_FILE    4
+
+typedef struct {
+    int kind;           /* FD_* above */
+    u32 fat_cluster;    /* first cluster for FD_FILE */
+    u32 offset;         /* byte offset for FD_FILE */
+    u32 size;           /* file size for FD_FILE */
+} fd_entry_t;
 
 typedef enum {
     TASK_READY,
@@ -34,6 +49,9 @@ typedef struct process {
     u32 eflags;         // Last saved eflags
     task_state_t state;
     page_dir_t* page_dir; // This process's page directory (NULL = use kernel)
+    fd_entry_t fds[MAX_FDS]; // file descriptor table
+    u32 brk_end;             // current heap break (for Linux brk syscall)
+    int is_elf;              // 1 = Linux ELF ABI, 0 = native NoanOS ABI
     struct process* next;
 } process_t;
 

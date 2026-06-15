@@ -49,5 +49,6 @@ struct tss_entry {
 
 void gdt_init(void);
 void tss_set_stack(u32 stack);
+void gdt_set_tls(u32 base);
 
 #endif

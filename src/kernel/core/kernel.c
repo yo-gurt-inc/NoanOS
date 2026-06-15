@@ -56,17 +56,30 @@ void kmain(u32 boot_drive_raw, u32 initrd_addr) {
 
     int is_live = 0;
     int drive_idx = (boot_drive >= 0x80) ? (boot_drive - 0x80) : 0;
+    serial_puts("[kernel] drive_idx=");
+    serial_dec(drive_idx);
+    serial_puts("\n");
     ata_drive_t* boot_disk = ata_get_drive(drive_idx);
+    serial_puts("[kernel] boot_disk=");
+    serial_dec(boot_disk ? 1 : 0);
+    serial_puts(" exists=");
+    serial_dec(boot_disk ? boot_disk->exists : 0);
+    serial_puts("\n");
     
     if (boot_disk && boot_disk->exists) {
         u8* buf = (u8*)kmalloc(512);
+        serial_puts("[kernel] reading sector 255\n");
         ata_read_sectors(boot_disk, 255, 1, (u16*)buf);
+        serial_puts("[kernel] sector 255 read OK\n");
         
         if (buf[0] == 'L' && buf[1] == 'I' && buf[2] == 'V' && buf[3] == 'E') {
             is_live = 1;
         }
         kfree(buf);
     }
+    serial_puts("[kernel] is_live=");
+    serial_dec(is_live);
+    serial_puts("\n");
 
     if (is_live) {
         if (installer_start(boot_drive)) {
@@ -74,23 +87,36 @@ void kmain(u32 boot_drive_raw, u32 initrd_addr) {
         }
     } else {
         if (boot_disk && boot_disk->exists) {
+            serial_puts("[kernel] fat32_init\n");
             fat32_init(boot_disk);
+            serial_puts("[kernel] fat32_init OK\n");
         }
     }
     
     void* shell_entry_addr = 0;
     if (!is_live) {
+        serial_puts("[kernel] noan_load shell\n");
         shell_entry_addr = (void*)noan_load("shell");
+        serial_puts("[kernel] noan_load result=");
+        serial_dec((u32)shell_entry_addr);
+        serial_puts("\n");
         if (shell_entry_addr == 0) {
             shell_entry_addr = initrd_get_entry();
+            serial_puts("[kernel] using initrd entry\n");
         }
     } else {
         shell_entry_addr = initrd_get_entry();
     }
 
+    serial_puts("[kernel] shell_entry=");
+    serial_dec((u32)shell_entry_addr);
+    serial_puts("\n");
     if (shell_entry_addr) {
+        serial_puts("[kernel] task_create\n");
         task_create(shell_entry_addr, 0x1, 0);
+        serial_puts("[kernel] task_yield\n");
         task_yield();
+        serial_puts("[kernel] back from yield\n");
     } else {
         panic("No shell entry point");
     }

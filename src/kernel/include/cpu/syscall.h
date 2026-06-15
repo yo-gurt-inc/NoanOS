@@ -35,6 +35,7 @@
 #define SYS_READ_NB   28   /* Non-blocking read: returns 0 immediately if no key waiting */
 #define SYS_FLUSH_KB  29   /* Discard all buffered keypresses */
 #define SYS_KB_ENABLE 30   /* 0 = discard input during command, 1 = re-enable + flush */
+#define SYS_EXEC_ELF  31   /* load+run an ELF binary from FAT32: arg1=path */
 
 void syscall_init(void);
 u32 syscall_handler(u32 esp);

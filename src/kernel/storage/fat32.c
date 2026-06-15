@@ -97,7 +97,23 @@ int fat32_format(ata_drive_t* drive) {
 
     kprint(" Creating Root Directory...\n");
     for (int i = 0; i < 512; i++) b[i] = 0;
-    ata_write_sectors(drive, 128 + (2 * 160), 1, buf);
+    /* Zero all sectors in root cluster (SPC=8) */
+    u32 root_lba = 128 + (2 * 160); /* data_start + (cluster2-2)*SPC */
+    for (int s = 0; s < 8; s++) {
+        ata_write_sectors(drive, root_lba + s, 1, buf);
+    }
+    /* Verify: read back sector 0 of root cluster and check it's zero */
+    {
+        u16* check = (u16*)kmalloc(512);
+        if (check) {
+            ata_read_sectors(drive, root_lba, 1, check);
+            u8* cb = (u8*)check;
+            int dirty = 0;
+            for (int i = 0; i < 512; i++) if (cb[i]) { dirty = 1; break; }
+            kprint(dirty ? "[WARN] root cluster not zeroed!\n" : "[OK] root cluster zeroed\n");
+            kfree(check);
+        }
+    }
 
     kfree(buf);
     kprint("Format Complete!\n");
