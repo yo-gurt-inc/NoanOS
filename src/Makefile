@@ -80,13 +80,14 @@ cross:
 	@echo "Installing dependencies..."
 ifeq ($(UNAME_S),Linux)
 	@if command -v apt-get >/dev/null 2>&1; then \
-		sudo apt-get update && sudo apt-get install -y nasm gcc-multilib g++-multilib gcc-i686-linux-gnu mtools python3 qemu-system-x86 make git; \
+		sudo apt-get update && sudo apt-get install -y nasm gcc-multilib g++-multilib mtools python3 qemu-system-x86 make git || true; \
+		sudo apt-get install -y gcc-i686-linux-gnu 2>/dev/null || echo "Note: gcc-i686-linux-gnu not available, using gcc-multilib"; \
 	elif command -v dnf >/dev/null 2>&1; then \
 		sudo dnf install -y nasm gcc gcc-c++ glibc-devel.i686 mtools python3 qemu-system-x86 make git; \
 	elif command -v pacman >/dev/null 2>&1; then \
 		sudo pacman -S --needed --noconfirm nasm gcc lib32-gcc-libs mtools python qemu-system-x86 make git; \
 	else \
-		echo "Install manually: nasm gcc-multilib i686-linux-gnu-gcc mtools python3 qemu-system-x86 make git"; \
+		echo "Install manually: nasm gcc-multilib mtools python3 qemu-system-x86 make git"; \
 	fi
 endif
 	@echo "Building musl libc for i686..."
