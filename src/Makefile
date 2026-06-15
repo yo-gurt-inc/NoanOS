@@ -74,6 +74,8 @@ HDD_IMG  = $(IMG_DIR)/hdd.img
 TOTAL_FILES := $(words $(KERNEL_C) $(SH_C) $(KERNEL_ASM) $(USER_SRC))
 CURRENT     := 0
 
+.DEFAULT_GOAL := all
+
 # Setup cross-compilation toolchain
 .PHONY: cross
 cross:
