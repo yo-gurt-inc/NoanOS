@@ -95,7 +95,7 @@ endif
 	@echo "Building musl libc for i686..."
 	@cd .. && if [ ! -f musl-noan/lib/libc.a ]; then \
 		rm -rf musl-noan && \
-		git clone https://github.com/bminor/musl.git musl-noan && \
+		git clone git://git.musl-libc.org/musl musl-noan && \
 		cd musl-noan && \
 		./configure --prefix=$$(pwd) --target=i686 CFLAGS="-m32 -march=i686" --disable-shared && \
 		make -j$$(nproc) && make install; \
