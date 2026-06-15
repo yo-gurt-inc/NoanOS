@@ -1,10 +1,14 @@
 #include "core/panic.h"
 #include "io/kprint.h"
 #include "io/terminal.h"
+#include "io/serial.h"
 
 void panic(const char* message) {
-    // Disable interrupts to prevent further system activity
     asm volatile("cli");
+
+    serial_puts("\n[KERNEL PANIC] ");
+    serial_puts(message);
+    serial_puts("\n");
 
     // Set terminal color to White on Red
     terminal_set_color(vga_entry_color(15, 4)); // 15 = White, 4 = Red

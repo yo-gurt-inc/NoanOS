@@ -2,6 +2,7 @@
 #include "cpu/task.h"
 #include "io/io.h"
 #include "io/kprint.h"
+#include "io/serial.h"
 
 struct idt_entry idt[IDT_ENTRIES];
 struct idt_ptr idtp;
@@ -156,9 +157,50 @@ void idt_init(void) {
     idt_load((u32)&idtp);
 }
 
+static const char* exception_names[] = {
+    "Divide by Zero", "Debug", "NMI", "Breakpoint",
+    "Overflow", "Bound Range", "Invalid Opcode", "Device Not Available",
+    "Double Fault", "Coprocessor Overrun", "Invalid TSS", "Segment Not Present",
+    "Stack Fault", "General Protection Fault", "Page Fault", "Reserved",
+    "FPU Fault", "Alignment Check", "Machine Check", "SIMD Fault",
+};
+
+static void serial_dump(struct registers* r) {
+    const char* name = (r->int_no < 20) ? exception_names[r->int_no] : "Unknown";
+    serial_puts("\n[EXCEPTION #");
+    serial_dec(r->int_no);
+    serial_puts(" ");
+    serial_puts(name);
+    serial_puts("]\n");
+    serial_puts("  EIP="); serial_hex(r->eip);
+    serial_puts(" CS=");   serial_hex(r->cs);
+    serial_puts(" EFLAGS="); serial_hex(r->eflags);
+    serial_puts("\n");
+    serial_puts("  EAX="); serial_hex(r->eax);
+    serial_puts(" EBX="); serial_hex(r->ebx);
+    serial_puts(" ECX="); serial_hex(r->ecx);
+    serial_puts(" EDX="); serial_hex(r->edx);
+    serial_puts("\n");
+    serial_puts("  ESI="); serial_hex(r->esi);
+    serial_puts(" EDI="); serial_hex(r->edi);
+    serial_puts(" EBP="); serial_hex(r->ebp);
+    serial_puts(" ESP="); serial_hex(r->esp);
+    serial_puts("\n");
+    serial_puts("  DS=");  serial_hex(r->ds);
+    serial_puts(" ERR="); serial_hex(r->err_code);
+    if (r->int_no == 14) {
+        u32 cr2;
+        asm volatile("mov %%cr2, %0" : "=r"(cr2));
+        serial_puts(" CR2="); serial_hex(cr2);
+    }
+    serial_puts("\n");
+}
+
 u32 isr_handler(u32 esp) {
     struct registers* r = (struct registers*)esp;
     
+    serial_dump(r);
+
     // Check if fault came from user mode (CS = 0x1B for user, 0x08 for kernel)
     int is_user_mode = (r->cs == 0x1B);
     
@@ -190,6 +232,7 @@ u32 isr_handler(u32 esp) {
         return new_esp;
     } else {
         // Kernel-mode fault is fatal
+        serial_puts("[KERNEL FAULT - HALTING]\n");
         kprint("[FATAL FAULT #");
         kprint_dec(r->int_no);
         kprint("] at EIP=");

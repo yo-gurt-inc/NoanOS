@@ -3,6 +3,7 @@
 
 #include "core/types.h"
 #include "cpu/idt.h"
+#include "cpu/paging.h"
 
 #define MAX_PROCESSES 16
 #define STACK_SIZE 4096
@@ -32,6 +33,7 @@ typedef struct process {
     u32 cs;             // Last saved code segment
     u32 eflags;         // Last saved eflags
     task_state_t state;
+    page_dir_t* page_dir; // This process's page directory (NULL = use kernel)
     struct process* next;
 } process_t;
 

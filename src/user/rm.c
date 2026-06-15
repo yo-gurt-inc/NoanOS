@@ -5,6 +5,8 @@ void _start(int argc, char** argv) {
         print("Usage: rm <file>\n");
         exit();
     }
-    _syscall2(SYS_RM, (u32)argv[1], 0);
+    const char* path = argv[1];
+    if (path[0] == '.' && path[1] == '/') path += 2;
+    _syscall2(SYS_RM, (u32)path, 0);
     exit();
 }

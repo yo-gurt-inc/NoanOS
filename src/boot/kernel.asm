@@ -7,19 +7,29 @@ section .text
 ; Export interrupt handlers for C code
  
     
-_start:                ; This will be at 0x100000 when loaded
-    ; Diagnostic 'K'
+_start:
     mov word [0xB8000], 0x0F4B ; 'K' on black, bright white
     
-    ; Set up stack if needed
-    mov esp, 0x9C00    ; Or wherever you want your kernel stack
-    
-    ; Push the initrd address passed in ESI from the bootloader
+    mov esp, 0x9C00
+
+    ; Save boot args before we clobber registers
+    mov [boot_drive_save], eax
+    mov [initrd_save], esi
+
+    ; Zero BSS
+    extern bss_start
+    extern bss_end
+    mov edi, bss_start
+    mov ecx, bss_end
+    sub ecx, edi
+    xor eax, eax
+    rep stosb
+
+    ; Restore and call kmain(boot_drive, initrd_addr)
+    mov eax, [boot_drive_save]
+    mov esi, [initrd_save]
     push esi
-    ; Push the boot drive passed in EAX from the bootloader
     push eax
-    
-    ; Call your C main function
     call kmain
     
     ; Halt if kmain returns
@@ -43,7 +53,11 @@ gdt_flush:
 
 global tss_flush
 tss_flush:
-    mov ax, 0x2B        ; Index of TSS (5 * 8 = 40 = 0x28) | RPL 3 = 0x2B
+    mov ax, 0x2B
     ltr ax
     ret
+
+section .data
+boot_drive_save dd 0
+initrd_save     dd 0
 

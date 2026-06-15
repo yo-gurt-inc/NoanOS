@@ -11,28 +11,48 @@
 #include "cpu/gdt.h"
 #include "cpu/task.h"
 #include "cpu/syscall.h"
+#include "cpu/paging.h"
+#include "io/serial.h"
 #include "core/initrd.h"
 #include "core/panic.h"
 #include "storage/noan.h"
 
 void kmain(u32 boot_drive_raw, u32 initrd_addr) {
-    u32 boot_drive = boot_drive_raw & 0xFF; // Only keep the drive number
+    u32 boot_drive = boot_drive_raw & 0xFF;
+    serial_init();
+    serial_puts("[kernel] boot drive=");
+    serial_dec(boot_drive);
+    serial_puts("\n");
     kprint_init();
 
     malloc_init(0x400000, 4 * 1024 * 1024);
+    serial_puts("[kernel] malloc OK\n");
     
     gdt_init();
+    serial_puts("[kernel] gdt OK\n");
     idt_init();
+    serial_puts("[kernel] idt OK\n");
+    paging_init();
+    serial_puts("[kernel] paging OK\n");
     syscall_init();
+    serial_puts("[kernel] syscall OK\n");
     task_init();
+    serial_puts("[kernel] task OK\n");
+    /* Set the idle/kernel task to use the kernel page directory */
+    get_current_process()->page_dir = kernel_page_dir;
     timer_init(100);
+    serial_puts("[kernel] timer OK\n");
     keyboard_init();
+    serial_puts("[kernel] keyboard OK\n");
     ata_init();
+    serial_puts("[kernel] ata OK\n");
     asm volatile("sti");
+    serial_puts("[kernel] sti OK\n");
 
     if (initrd_unpack(initrd_addr) < 0) {
         panic("INITRD not found or corrupt");
     }
+    serial_puts("[kernel] initrd OK\n");
 
     int is_live = 0;
     int drive_idx = (boot_drive >= 0x80) ? (boot_drive - 0x80) : 0;

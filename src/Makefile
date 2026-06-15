@@ -21,8 +21,8 @@ ASMFLAGS = -f elf32
 BOOT_SRC   = $(BOOT_SRC_DIR)/boot.asm
 KERNEL_ASM = kernel.asm interrupts.asm
 KERNEL_C   = kernel/core/kernel.c kernel/core/malloc.c kernel/core/memory_map.c kernel/core/panic.c kernel/core/initrd.c kernel/core/installer.c \
-             kernel/cpu/gdt.c kernel/cpu/idt.c kernel/cpu/task.c kernel/cpu/syscall.c \
-             kernel/io/kprint.c kernel/io/terminal.c kernel/io/keyboard.c kernel/io/framebuffer.c \
+             kernel/cpu/gdt.c kernel/cpu/idt.c kernel/cpu/task.c kernel/cpu/syscall.c kernel/cpu/paging.c \
+             kernel/io/kprint.c kernel/io/terminal.c kernel/io/keyboard.c kernel/io/framebuffer.c kernel/io/serial.c \
              kernel/storage/ata.c kernel/storage/fat32.c kernel/storage/fat32_fat.c kernel/storage/fat32_path.c kernel/storage/fat32_dir.c kernel/storage/fat32_file.c kernel/storage/elf.c kernel/storage/noan.c \
              kernel/system/timer.c kernel/system/rtc.c kernel/system/power.c
 SH_C       = userspace/shell/shell.c \
@@ -121,7 +121,10 @@ $(HDD_IMG): | $(IMG_DIR)
 
 run: $(DISK_IMG) $(HDD_IMG)
 	pkill -f "qemu-system-i[3]86" || true
-	qemu-system-i386 -drive format=raw,file=$(DISK_IMG),index=0 -drive format=raw,file=$(HDD_IMG),index=1
+	qemu-system-i386 -drive format=raw,file=$(DISK_IMG),index=0 -drive format=raw,file=$(HDD_IMG),index=1 \
+		-serial file:serial.log &
+	@sleep 3
+	@echo "=== serial.log ===" && cat serial.log
 
 run-installed: $(HDD_IMG)
 	pkill -f "qemu-system-i[3]86" || true

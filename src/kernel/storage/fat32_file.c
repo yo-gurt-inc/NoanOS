@@ -10,6 +10,7 @@ extern void _fat32_set_fat_entry(u32 cluster, u32 value);
 extern void _fat32_create_entry(const char* name, u8 attr, u32 first_cluster, u32 size);
 extern ata_drive_t* _fat32_get_current_drive(void);
 extern fat32_bpb_t* _fat32_get_bpb(void);
+extern u32 _fat32_get_current_dir_cluster(void);
 
 // ============================================================================
 // PUBLIC API: Display file contents
@@ -145,7 +146,7 @@ void fat32_touch(const char* name) {
 void fat32_rm(const char* name, int flags) {
     ata_drive_t* drive = _fat32_get_current_drive();
     if (!drive) return;
-    
+
     u8 fat_name[11];
     _fat32_name_to_83(name, fat_name);
 
@@ -153,7 +154,7 @@ void fat32_rm(const char* name, int flags) {
     u16* buf = (u16*)kmalloc(bpb->sectors_per_cluster * 512);
     if (!buf) return;
     
-    u32 current_cluster = 0; // Would get this from fat32.c in real implementation
+    u32 current_cluster = _fat32_get_current_dir_cluster();
     u32 dir_lba = _fat32_cluster_to_lba(current_cluster);
     ata_read_sectors(drive, dir_lba, bpb->sectors_per_cluster, buf);
     fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;

@@ -1,4 +1,5 @@
 #include "cpu/task.h"
+#include "cpu/paging.h"
 #include "core/malloc.h"
 #include "cpu/gdt.h"
 #include "io/kprint.h"
@@ -22,6 +23,7 @@ void task_init(void) {
     }
     
     current_process->ustack = 0;
+    current_process->page_dir = NULL; /* filled in after paging_init */
     current_process->next = current_process;
     process_list = current_process;
 }
@@ -89,6 +91,9 @@ process_t* task_create(void* entry, u32 flags, int parent_id) {
 
     proc->esp = (u32)stack;
 
+    /* Give this process its own page directory (inherits kernel mapping) */
+    proc->page_dir = paging_new_dir();
+
     // Add to list
     proc->next = process_list->next;
     process_list->next = proc;
@@ -152,6 +157,11 @@ u32 task_switch(u32 esp) {
     current_process->state = TASK_RUNNING;
 
     tss_set_stack(current_process->kstack);
+
+    /* Switch address space if the process has its own page directory */
+    page_dir_t* dir = current_process->page_dir ? current_process->page_dir : kernel_page_dir;
+    if (dir) paging_load_dir(dir);
+
     return next->esp;
 }
 
