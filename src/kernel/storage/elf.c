@@ -73,7 +73,6 @@ process_t* elf_load_file(const char* path) {
         if (ph.p_filesz > 0)
             elf_read_at(&entry, ph.p_offset, (u8*)ph.p_vaddr, ph.p_filesz);
 
-        /* Zero BSS */
         u8* bss = (u8*)(ph.p_vaddr + ph.p_filesz);
         for (u32 j = 0; j < ph.p_memsz - ph.p_filesz; j++) bss[j] = 0;
 
@@ -88,7 +87,5 @@ process_t* elf_load_file(const char* path) {
     proc->brk_end = brk;
     proc->is_elf  = 1;
 
-    kprint("elf_load: "); kprint(path);
-    kprint(" entry="); kprint_hex(eh.e_entry); kprint("\n");
     return proc;
 }

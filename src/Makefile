@@ -4,9 +4,6 @@ CC       = i686-linux-gnu-gcc
 LD       = i686-linux-gnu-ld
 OBJCOPY  = i686-linux-gnu-objcopy
 
-# Detect OS
-UNAME_S := $(shell uname -s)
-
 # Directories
 BUILD_DIR    = build/obj
 IMG_DIR      = build/img
@@ -73,36 +70,6 @@ HDD_IMG  = $(IMG_DIR)/hdd.img
 # Progress tracking
 TOTAL_FILES := $(words $(KERNEL_C) $(SH_C) $(KERNEL_ASM) $(USER_SRC))
 CURRENT     := 0
-
-.DEFAULT_GOAL := all
-
-# Setup cross-compilation toolchain
-.PHONY: cross
-cross:
-	@echo "Installing dependencies..."
-ifeq ($(UNAME_S),Linux)
-	@if command -v apt-get >/dev/null 2>&1; then \
-		sudo apt-get update && sudo apt-get install -y nasm gcc-multilib g++-multilib mtools python3 qemu-system-x86 make git || true; \
-		sudo apt-get install -y gcc-i686-linux-gnu 2>/dev/null || echo "Note: gcc-i686-linux-gnu not available, using gcc-multilib"; \
-	elif command -v dnf >/dev/null 2>&1; then \
-		sudo dnf install -y nasm gcc gcc-c++ glibc-devel.i686 mtools python3 qemu-system-x86 make git; \
-	elif command -v pacman >/dev/null 2>&1; then \
-		sudo pacman -S --needed --noconfirm nasm gcc lib32-gcc-libs mtools python qemu-system-x86 make git; \
-	else \
-		echo "Install manually: nasm gcc-multilib mtools python3 qemu-system-x86 make git"; \
-	fi
-endif
-	@echo "Building musl libc for i686..."
-	@cd .. && if [ ! -f musl-noan/lib/libc.a ]; then \
-		rm -rf musl-noan && \
-		git clone git://git.musl-libc.org/musl musl-noan && \
-		cd musl-noan && \
-		./configure --prefix=$$(pwd) --target=i686 CFLAGS="-m32 -march=i686" --disable-shared && \
-		make -j$$(nproc) && make install; \
-	else \
-		echo "musl already built at ../musl-noan"; \
-	fi
-	@echo "Done! Run 'make' to build NoanOS."
 
 # Default target
 all: $(DISK_IMG) $(HDD_IMG)

@@ -23,10 +23,13 @@ extern void syscall_stub(void);
  * musl statically-linked binaries use these numbers.
  * ------------------------------------------------------------------------- */
 #define LINUX_SYS_EXIT      1
+#define LINUX_SYS_FORK      2
 #define LINUX_SYS_READ      3
 #define LINUX_SYS_WRITE     4
 #define LINUX_SYS_OPEN      5
 #define LINUX_SYS_CLOSE     6
+#define LINUX_SYS_EXECVE   11
+#define LINUX_SYS_LSEEK    19
 #define LINUX_SYS_GETPID   20
 #define LINUX_SYS_BRK      45
 #define LINUX_SYS_IOCTL    54
@@ -34,7 +37,9 @@ extern void syscall_stub(void);
 #define LINUX_SYS_MUNMAP   91
 #define LINUX_SYS_CLONE   120
 #define LINUX_SYS_UNAME   122
+#define LINUX_SYS_LLSEEK  140
 #define LINUX_SYS_FSTAT64 197
+#define LINUX_SYS_STAT64  195
 #define LINUX_SYS_MMAP2   192
 #define LINUX_SYS_GETUID  199
 #define LINUX_SYS_GETGID  200
@@ -95,7 +100,6 @@ static int proc_read_fd(int fd, char* buf, u32 count) {
     fd_entry_t* f = &proc->fds[fd];
 
     if (f->kind == FD_STDIN) {
-        /* Blocking single-char read from keyboard */
         int c = keyboard_getchar();
         if (c == 0) return 0;
         buf[0] = (char)c;
@@ -107,12 +111,37 @@ static int proc_read_fd(int fd, char* buf, u32 count) {
         if (count > remaining) count = remaining;
         if (count == 0) return 0;
 
-        /* Use fat32_read with a temp name approach: we don't have a path
-           stored, so we read directly via cluster walk. For now, use the
-           simpler fat32_read which works by path — this is a limitation.
-           TODO: add cluster-based fat32_read_cluster(). */
-        /* Fallback: return EOF since we can't easily seek by cluster here */
-        return 0;
+        extern u32 _fat32_cluster_to_lba(u32);
+        extern u32 _fat32_get_fat_entry(u32);
+        extern ata_drive_t* _fat32_get_current_drive();
+        extern fat32_bpb_t* _fat32_get_bpb();
+
+        fat32_bpb_t* bpb = _fat32_get_bpb();
+        ata_drive_t* drive = _fat32_get_current_drive();
+        u32 cluster_size = bpb->sectors_per_cluster * 512;
+        u32 cluster = f->fat_cluster;
+        u32 skip = f->offset;
+
+        while (skip >= cluster_size && cluster < 0x0FFFFFF8) {
+            skip -= cluster_size;
+            cluster = _fat32_get_fat_entry(cluster);
+        }
+
+        u32 total = 0;
+        u8 tmp[512];
+        while (total < count && cluster < 0x0FFFFFF8) {
+            u32 lba = _fat32_cluster_to_lba(cluster);
+            for (u32 s = 0; s < bpb->sectors_per_cluster && total < count; s++) {
+                ata_read_sectors(drive, lba + s, 1, (u16*)tmp);
+                u32 start = (skip > 0 && s == 0) ? skip : 0;
+                for (u32 i = start; i < 512 && total < count; i++)
+                    buf[total++] = tmp[i];
+                skip = 0;
+            }
+            cluster = _fat32_get_fat_entry(cluster);
+        }
+        f->offset += total;
+        return (int)total;
     }
 
     return -1;
@@ -127,6 +156,8 @@ static int linux_syscall(struct registers* regs) {
     u32 arg1 = regs->ebx;
     u32 arg2 = regs->ecx;
     u32 arg3 = regs->edx;
+
+    serial_puts("[syscall "); serial_dec(num); serial_puts("]\n");
 
     switch (num) {
         case LINUX_SYS_EXIT: {
@@ -202,6 +233,58 @@ static int linux_syscall(struct registers* regs) {
             return 1;
         }
 
+        case LINUX_SYS_FORK: {
+            regs->eax = (u32)-38; /* ENOSYS - not supported */
+            return 1;
+        }
+
+        case LINUX_SYS_EXECVE: {
+            regs->eax = (u32)-38; /* ENOSYS - not supported */
+            return 1;
+        }
+
+        case LINUX_SYS_LSEEK: {
+            process_t* proc = get_current_process();
+            int fd = (int)arg1;
+            u32 offset = arg2;
+            int whence = (int)arg3;
+            serial_puts("[lseek fd="); serial_dec(fd); serial_puts("]\n");
+            if (!proc || fd < 0 || fd >= MAX_FDS) { 
+                serial_puts("[lseek: bad fd]\n");
+                regs->eax = (u32)-9; return 1; 
+            }
+            fd_entry_t* f = &proc->fds[fd];
+            serial_puts("[lseek kind="); serial_dec(f->kind); serial_puts("]\n");
+            if (f->kind != FD_FILE) { 
+                serial_puts("[lseek: not a file]\n");
+                regs->eax = (u32)-9; return 1; 
+            }
+            if (whence == 0) f->offset = offset;
+            else if (whence == 1) f->offset += offset;
+            else if (whence == 2) f->offset = f->size + offset;
+            if (f->offset > f->size) f->offset = f->size;
+            regs->eax = f->offset;
+            return 1;
+        }
+
+        case LINUX_SYS_LLSEEK: {
+            process_t* proc = get_current_process();
+            int fd = (int)arg1;
+            u32 offset = arg3;
+            int whence = regs->esi;
+            u32* result = (u32*)regs->edi;
+            if (!proc || fd < 0 || fd >= MAX_FDS) { regs->eax = (u32)-9; return 1; }
+            fd_entry_t* f = &proc->fds[fd];
+            if (f->kind != FD_FILE) { regs->eax = (u32)-9; return 1; }
+            if (whence == 0) f->offset = offset;
+            else if (whence == 1) f->offset += offset;
+            else if (whence == 2) f->offset = f->size + offset;
+            if (f->offset > f->size) f->offset = f->size;
+            if (result) { result[0] = f->offset; result[1] = 0; }
+            regs->eax = 0;
+            return 1;
+        }
+
         case LINUX_SYS_GETPID: {
             process_t* proc = get_current_process();
             regs->eax = proc ? (u32)proc->id : 1;
@@ -271,6 +354,15 @@ static int linux_syscall(struct registers* regs) {
 
         case LINUX_SYS_FSTAT64:
             /* Return a zeroed struct — good enough for musl startup checks */
+            if (arg2) {
+                u8* s = (u8*)arg2;
+                for (int i = 0; i < 96; i++) s[i] = 0;
+            }
+            regs->eax = 0;
+            return 1;
+
+        case LINUX_SYS_STAT64:
+            /* stat64(path, struct stat64*) - return zeroed struct */
             if (arg2) {
                 u8* s = (u8*)arg2;
                 for (int i = 0; i < 96; i++) s[i] = 0;
