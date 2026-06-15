@@ -1,0 +1,26 @@
+#!/bin/bash
+# musl-noan-cc — compile a C program statically against musl for NoanOS
+#
+# Usage: musl-noan-cc [source.c ...] -o output
+#
+# The binary will be loadable by elf_load_file() and runnable via
+# the SYS_EXEC_ELF (31) syscall or the `run` shell command.
+#
+# All segments are placed in 0x200000–0xE00000 (inside the 16MB
+# identity-mapped window of NoanOS).
+
+MUSL=/root/NoanOS/musl-noan
+CC=i686-linux-gnu-gcc
+
+exec $CC \
+  -m32 -march=i686 \
+  -static \
+  -nostdlib \
+  -I$MUSL/include \
+  -Wl,-Ttext-segment=0x200000 \
+  $MUSL/lib/crt1.o \
+  $MUSL/lib/crti.o \
+  "$@" \
+  $MUSL/lib/libc.a \
+  $MUSL/lib/crtn.o \
+  -lgcc -lgcc_eh

@@ -24,47 +24,42 @@ void fat32_ls(void) {
     
     fat32_bpb_t* bpb = _fat32_get_bpb();
     u32 cluster = _fat32_get_current_dir_cluster();
-    u16* buf = (u16*)kmalloc(bpb->sectors_per_cluster * 512);
+    u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
     if (!buf) return;
 
-    ata_read_sectors(drive, _fat32_cluster_to_lba(cluster), bpb->sectors_per_cluster, buf);
-    
-    fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
-    int max_entries = (bpb->sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
-    
     int count = 0;
-    for (int i = 0; i < max_entries; i++) {
-        if (entries[i].name[0] == 0x00) break;
-        if (entries[i].name[0] == 0xE5) continue;
-        if (entries[i].attr == FAT_ATTR_LFN) continue;
+    while (cluster >= 2 && cluster < 0x0FFFFFF8) {
+        ata_read_sectors(drive, _fat32_cluster_to_lba(cluster), bpb->sectors_per_cluster, (u16*)buf);
         
-        count++;
-        // Print filename (up to 8 chars)
-        for (int j = 0; j < 8; j++) {
-            if (entries[i].name[j] != ' ') terminal_putchar(entries[i].name[j]);
-        }
-        // Print extension if it exists (up to 3 chars)
-        if (entries[i].name[8] != ' ') {
-            terminal_putchar('.');
-            for (int j = 8; j < 11; j++) {
+        fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
+        int max_entries = (bpb->sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
+        
+        for (int i = 0; i < max_entries; i++) {
+            if (entries[i].name[0] == 0x00) { kfree(buf); if (count == 0) kprint("\n"); return; }
+            if (entries[i].name[0] == 0xE5) continue;
+            if (entries[i].attr == FAT_ATTR_LFN) continue;
+            
+            count++;
+            for (int j = 0; j < 8; j++) {
                 if (entries[i].name[j] != ' ') terminal_putchar(entries[i].name[j]);
             }
+            if (entries[i].name[8] != ' ') {
+                terminal_putchar('.');
+                for (int j = 8; j < 11; j++) {
+                    if (entries[i].name[j] != ' ') terminal_putchar(entries[i].name[j]);
+                }
+            }
+            if (entries[i].attr & FAT_ATTR_DIRECTORY) {
+                kprint("/");
+            }
+            if (!(entries[i].attr & FAT_ATTR_DIRECTORY)) {
+                kprint(" ("); kprint_dec(entries[i].file_size); kprint("B)");
+            }
+            kprint("\n");
         }
-        
-        // Print type indicator
-        if (entries[i].attr & FAT_ATTR_DIRECTORY) {
-            kprint("/");
-        }
-        
-        // Print file size for regular files
-        if (!(entries[i].attr & FAT_ATTR_DIRECTORY)) {
-            kprint(" ("); kprint_dec(entries[i].file_size); kprint("B)");
-        }
-        kprint("\n");
+        cluster = _fat32_get_fat_entry(cluster);
     }
-    if (count == 0) {
-        kprint("\n");
-    }
+    if (count == 0) kprint("\n");
     kfree(buf);
 }
 
@@ -86,11 +81,11 @@ void fat32_cd(const char* name) {
     _fat32_name_to_83(name, fat_name);
 
     fat32_bpb_t* bpb = _fat32_get_bpb();
-    u16* buf = (u16*)kmalloc(bpb->sectors_per_cluster * 512);
+    u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
     if (!buf) return;
 
     u32 current_cluster = _fat32_get_current_dir_cluster();
-    ata_read_sectors(drive, _fat32_cluster_to_lba(current_cluster), bpb->sectors_per_cluster, buf);
+    ata_read_sectors(drive, _fat32_cluster_to_lba(current_cluster), bpb->sectors_per_cluster, (u16*)buf);
     fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
     int max_entries = (bpb->sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
 
@@ -133,10 +128,10 @@ void fat32_mkdir(const char* name) {
     _fat32_create_entry(name, FAT_ATTR_DIRECTORY, clus, 0);
 
     fat32_bpb_t* bpb = _fat32_get_bpb();
-    u16* buf = (u16*)kmalloc(bpb->sectors_per_cluster * 512);
+    u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
     if (!buf) return;
 
-    for(int i=0; i<bpb->sectors_per_cluster*256; i++) buf[i] = 0;
+    for(int i=0; i<bpb->sectors_per_cluster*512; i++) buf[i] = 0;
     fat32_dir_entry_t* dot = (fat32_dir_entry_t*)buf;
     _fat32_name_to_83(".", dot[0].name); dot[0].attr = FAT_ATTR_DIRECTORY;
     dot[0].cluster_hi = (u16)(clus >> 16); dot[0].cluster_lo = (u16)(clus & 0xFFFF);
@@ -145,7 +140,7 @@ void fat32_mkdir(const char* name) {
     u32 parent = (current == bpb->root_cluster) ? 0 : current;
     dot[1].cluster_hi = (u16)(parent >> 16); dot[1].cluster_lo = (u16)(parent & 0xFFFF);
     
-    ata_write_sectors(drive, _fat32_cluster_to_lba(clus), bpb->sectors_per_cluster, buf);
+    ata_write_sectors(drive, _fat32_cluster_to_lba(clus), bpb->sectors_per_cluster, (u16*)buf);
     kfree(buf);
     //kprint("Created directory: "); kprint(name); kprint("\n");
 }

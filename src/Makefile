@@ -4,6 +4,9 @@ CC       = i686-linux-gnu-gcc
 LD       = i686-linux-gnu-ld
 OBJCOPY  = i686-linux-gnu-objcopy
 
+# Detect OS
+UNAME_S := $(shell uname -s)
+
 # Directories
 BUILD_DIR    = build/obj
 IMG_DIR      = build/img
@@ -70,6 +73,33 @@ HDD_IMG  = $(IMG_DIR)/hdd.img
 # Progress tracking
 TOTAL_FILES := $(words $(KERNEL_C) $(SH_C) $(KERNEL_ASM) $(USER_SRC))
 CURRENT     := 0
+
+# Setup cross-compilation toolchain
+.PHONY: cross
+cross:
+	@echo "Installing dependencies..."
+ifeq ($(UNAME_S),Linux)
+	@if command -v apt-get >/dev/null 2>&1; then \
+		sudo apt-get update && sudo apt-get install -y nasm gcc-multilib g++-multilib gcc-i686-linux-gnu mtools python3 qemu-system-x86 make git; \
+	elif command -v dnf >/dev/null 2>&1; then \
+		sudo dnf install -y nasm gcc gcc-c++ glibc-devel.i686 mtools python3 qemu-system-x86 make git; \
+	elif command -v pacman >/dev/null 2>&1; then \
+		sudo pacman -S --needed --noconfirm nasm gcc lib32-gcc-libs mtools python qemu-system-x86 make git; \
+	else \
+		echo "Install manually: nasm gcc-multilib i686-linux-gnu-gcc mtools python3 qemu-system-x86 make git"; \
+	fi
+endif
+	@echo "Building musl libc for i686..."
+	@cd .. && if [ ! -f musl-noan/lib/libc.a ]; then \
+		rm -rf musl-noan && \
+		git clone https://github.com/bminor/musl.git musl-noan && \
+		cd musl-noan && \
+		./configure --prefix=$$(pwd) --target=i686 CFLAGS="-m32 -march=i686" --disable-shared && \
+		make -j$$(nproc) && make install; \
+	else \
+		echo "musl already built at ../musl-noan"; \
+	fi
+	@echo "Done! Run 'make' to build NoanOS."
 
 # Default target
 all: $(DISK_IMG) $(HDD_IMG)
@@ -148,7 +178,7 @@ $(HDD_IMG): | $(IMG_DIR)
 	@MTOOLSRC=/dev/null mformat -i $(HDD_IMG) \
 		-v "SIMPLE OS " \
 		-N 12345678 \
-		-R 128 \
+		-R 704 \
 		-L 160 \
 		-c 8 \
 		-F ::

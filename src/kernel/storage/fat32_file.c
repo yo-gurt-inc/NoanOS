@@ -151,12 +151,12 @@ void fat32_rm(const char* name, int flags) {
     _fat32_name_to_83(name, fat_name);
 
     fat32_bpb_t* bpb = _fat32_get_bpb();
-    u16* buf = (u16*)kmalloc(bpb->sectors_per_cluster * 512);
+    u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
     if (!buf) return;
     
     u32 current_cluster = _fat32_get_current_dir_cluster();
     u32 dir_lba = _fat32_cluster_to_lba(current_cluster);
-    ata_read_sectors(drive, dir_lba, bpb->sectors_per_cluster, buf);
+    ata_read_sectors(drive, dir_lba, bpb->sectors_per_cluster, (u16*)buf);
     fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
     int max_entries = (bpb->sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
 
@@ -175,7 +175,7 @@ void fat32_rm(const char* name, int flags) {
             }
 
             entries[i].name[0] = 0xE5;
-            ata_write_sectors(drive, dir_lba, bpb->sectors_per_cluster, buf);
+            ata_write_sectors(drive, dir_lba, bpb->sectors_per_cluster, (u16*)buf);
             
             if (!(flags & 1)) { kprint("Deleted: "); kprint(name); kprint("\n"); }
             kfree(buf);

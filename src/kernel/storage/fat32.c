@@ -67,7 +67,7 @@ int fat32_format(ata_drive_t* drive) {
     for (int i = 0; i < 8; i++) f->oem_name[i]    = "SIMPLEOS"[i];
     f->bytes_per_sector   = 512;
     f->sectors_per_cluster = 8;
-    f->reserved_sector_count = 128;
+    f->reserved_sector_count = 704;
     f->num_fats           = 2;
     f->media_type         = 0xF8;
     f->total_sectors_32   = 20480;
@@ -86,19 +86,19 @@ int fat32_format(ata_drive_t* drive) {
     for (int i = 0; i < 512; i++) b[i] = 0;
     u32* fat = (u32*)buf;
     fat[0] = 0x0FFFFFF8; fat[1] = 0x0FFFFFFF; fat[2] = 0x0FFFFFFF;
-    ata_write_sectors(drive, 128,       1, buf);
-    ata_write_sectors(drive, 128 + 160, 1, buf);
+    ata_write_sectors(drive, 704,       1, buf);
+    ata_write_sectors(drive, 704 + 160, 1, buf);
 
     fat[0] = 0; fat[1] = 0; fat[2] = 0;
     for (int i = 1; i < 160; i++) {
-        ata_write_sectors(drive, 128 + i,       1, buf);
-        ata_write_sectors(drive, 128 + 160 + i, 1, buf);
+        ata_write_sectors(drive, 704 + i,       1, buf);
+        ata_write_sectors(drive, 704 + 160 + i, 1, buf);
     }
 
     kprint(" Creating Root Directory...\n");
     for (int i = 0; i < 512; i++) b[i] = 0;
     /* Zero all sectors in root cluster (SPC=8) */
-    u32 root_lba = 128 + (2 * 160); /* data_start + (cluster2-2)*SPC */
+    u32 root_lba = 704 + (2 * 160); /* data_start + (cluster2-2)*SPC */
     for (int s = 0; s < 8; s++) {
         ata_write_sectors(drive, root_lba + s, 1, buf);
     }

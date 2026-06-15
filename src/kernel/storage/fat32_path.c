@@ -52,9 +52,9 @@ int _fat32_find_entry(const char* name, fat32_dir_entry_t* out_entry) {
         u8 fat_name[11];
         _fat32_name_to_83(component, fat_name);
 
-        u16* buf = (u16*)kmalloc(bpb->sectors_per_cluster * 512);
+        u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
         if (!buf) return 0;
-        ata_read_sectors(_fat32_get_current_drive(), _fat32_cluster_to_lba(search_cluster), bpb->sectors_per_cluster, buf);
+        ata_read_sectors(_fat32_get_current_drive(), _fat32_cluster_to_lba(search_cluster), bpb->sectors_per_cluster, (u16*)buf);
         fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
         int max_entries = (bpb->sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
 
@@ -96,9 +96,9 @@ void _fat32_create_entry(const char* name, u8 attr, u32 first_cluster, u32 size)
 
         u8 fat_name[11];
         _fat32_name_to_83(component, fat_name);
-        u16* buf = (u16*)kmalloc(bpb->sectors_per_cluster * 512);
+        u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
         if (!buf) return;
-        ata_read_sectors(_fat32_get_current_drive(), _fat32_cluster_to_lba(target_dir_cluster), bpb->sectors_per_cluster, buf);
+        ata_read_sectors(_fat32_get_current_drive(), _fat32_cluster_to_lba(target_dir_cluster), bpb->sectors_per_cluster, (u16*)buf);
         fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
         int max_entries = (bpb->sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
 
@@ -111,7 +111,7 @@ void _fat32_create_entry(const char* name, u8 attr, u32 first_cluster, u32 size)
                     entries[i].cluster_hi = (u16)(first_cluster >> 16);
                     entries[i].cluster_lo = (u16)(first_cluster & 0xFFFF);
                     entries[i].file_size = size;
-                    ata_write_sectors(_fat32_get_current_drive(), _fat32_cluster_to_lba(target_dir_cluster), bpb->sectors_per_cluster, buf);
+                    ata_write_sectors(_fat32_get_current_drive(), _fat32_cluster_to_lba(target_dir_cluster), bpb->sectors_per_cluster, (u16*)buf);
                     break;
                 }
             }
@@ -147,7 +147,7 @@ void _fat32_create_entry(const char* name, u8 attr, u32 first_cluster, u32 size)
                     entries[i].cluster_hi = (u16)(new_cluster >> 16);
                     entries[i].cluster_lo = (u16)(new_cluster & 0xFFFF);
                     entries[i].file_size = 0;
-                    ata_write_sectors(_fat32_get_current_drive(), _fat32_cluster_to_lba(target_dir_cluster), bpb->sectors_per_cluster, buf);
+                    ata_write_sectors(_fat32_get_current_drive(), _fat32_cluster_to_lba(target_dir_cluster), bpb->sectors_per_cluster, (u16*)buf);
                     break;
                 }
             }
@@ -181,9 +181,9 @@ int _fat32_find_full_path_file(const char* path, fat32_dir_entry_t* out_entry) {
         fat_name[j++] = c;
     }
 
-    u16* buf = (u16*)kmalloc(bpb->sectors_per_cluster * 512);
+    u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
     if (!buf) return 0;
-    ata_read_sectors(_fat32_get_current_drive(), _fat32_cluster_to_lba(bpb->root_cluster), bpb->sectors_per_cluster, buf);
+    ata_read_sectors(_fat32_get_current_drive(), _fat32_cluster_to_lba(bpb->root_cluster), bpb->sectors_per_cluster, (u16*)buf);
     fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
     int max_entries = (bpb->sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
 

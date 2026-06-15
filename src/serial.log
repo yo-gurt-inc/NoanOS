@@ -40,4 +40,3 @@
 [kernel] task_create
 [kernel] task_yield
 [kernel] back from yield
-[write fd=0 count=2117620 buf=0x00000000]

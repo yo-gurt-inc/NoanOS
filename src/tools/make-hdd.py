@@ -16,7 +16,7 @@ INITRD    = "build/obj/initrd.bin"
 
 SECTOR    = 512
 # Must match fat32_format values
-RESERVED  = 128
+RESERVED  = 704
 FAT_SIZE  = 160   # sectors per FAT
 NUM_FATS  = 2
 SPC       = 8     # sectors per cluster
