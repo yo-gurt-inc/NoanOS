@@ -52,6 +52,7 @@ typedef struct process {
     fd_entry_t fds[MAX_FDS]; // file descriptor table
     u32 brk_end;             // current heap break (for Linux brk syscall)
     int is_elf;              // 1 = Linux ELF ABI, 0 = native NoanOS ABI
+    char cwd[256];           // current working directory
     struct process* next;
 } process_t;
 
@@ -60,6 +61,8 @@ process_t* task_create(void* entry, u32 flags, int parent_id);
 void task_kill_current(void);
 void task_yield(void);
 u32 task_switch(u32 esp);
+process_t* task_fork(struct registers* regs);
+int task_exec(const char* path, char** argv, char** envp);
 
 process_t* get_current_process(void);
 process_t* get_process_list(void);

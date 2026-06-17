@@ -28,16 +28,23 @@ extern void syscall_stub(void);
 #define LINUX_SYS_WRITE     4
 #define LINUX_SYS_OPEN      5
 #define LINUX_SYS_CLOSE     6
+#define LINUX_SYS_WAITPID   7
+#define LINUX_SYS_UNLINK   10
 #define LINUX_SYS_EXECVE   11
+#define LINUX_SYS_CHDIR    12
 #define LINUX_SYS_LSEEK    19
 #define LINUX_SYS_GETPID   20
+#define LINUX_SYS_ACCESS   33
+#define LINUX_SYS_RENAME   38
 #define LINUX_SYS_BRK      45
 #define LINUX_SYS_IOCTL    54
+#define LINUX_SYS_DUP2     63
 #define LINUX_SYS_MMAP     90
 #define LINUX_SYS_MUNMAP   91
 #define LINUX_SYS_CLONE   120
 #define LINUX_SYS_UNAME   122
 #define LINUX_SYS_LLSEEK  140
+#define LINUX_SYS_GETCWD  183
 #define LINUX_SYS_FSTAT64 197
 #define LINUX_SYS_STAT64  195
 #define LINUX_SYS_MMAP2   192
@@ -45,6 +52,7 @@ extern void syscall_stub(void);
 #define LINUX_SYS_GETGID  200
 #define LINUX_SYS_GETEUID 201
 #define LINUX_SYS_GETEGID 202
+#define LINUX_SYS_GETDENTS64 220
 #define LINUX_SYS_FCNTL64 221
 #define LINUX_SYS_SET_TLS 243
 
@@ -151,7 +159,7 @@ static int proc_read_fd(int fd, char* buf, u32 count) {
  * Linux syscall dispatcher — called for any num >= 1 that matches Linux ABI
  * Returns 1 if handled, 0 if not a Linux syscall we know.
  * ------------------------------------------------------------------------- */
-static int linux_syscall(struct registers* regs) {
+static int linux_syscall(struct registers* regs, u32 esp) {
     u32 num  = regs->eax;
     u32 arg1 = regs->ebx;
     u32 arg2 = regs->ecx;
@@ -179,6 +187,25 @@ static int linux_syscall(struct registers* regs) {
         }
 
         case 252: /* exit_group — same as exit for single-threaded */
+            {
+                process_t* cur = get_current_process();
+                if (cur) {
+                    cur->state = TASK_TERMINATED;
+                    if (cur->parent_id > 0) {
+                        process_t* p = get_process_list();
+                        process_t* start = p;
+                        do {
+                            if (p->id == cur->parent_id && p->state == TASK_WAITING) {
+                                serial_puts("[waking parent pid="); serial_dec(p->id); serial_puts("]\n");
+                                p->state = TASK_READY;
+                            }
+                            p = p->next;
+                        } while (p != start);
+                    }
+                }
+                regs->eax = 0;
+                return 1;
+            }
 
         case LINUX_SYS_WRITE: {
             /* write(fd, buf, count) */
@@ -188,6 +215,13 @@ static int linux_syscall(struct registers* regs) {
             serial_puts("[write fd="); serial_dec(fd);
             serial_puts(" count="); serial_dec(count);
             serial_puts(" buf="); serial_hex(arg2); serial_puts("]\n");
+            
+            /* Validate buffer pointer */
+            if (!buf && count > 0) {
+                regs->eax = (u32)-14; /* EFAULT */
+                return 1;
+            }
+            
             if (fd == 1 || fd == 2) {
                 terminal_write(buf, count);
                 regs->eax = count;
@@ -233,13 +267,134 @@ static int linux_syscall(struct registers* regs) {
             return 1;
         }
 
-        case LINUX_SYS_FORK: {
-            regs->eax = (u32)-38; /* ENOSYS - not supported */
+        case LINUX_SYS_DUP2: {
+            int oldfd = (int)arg1;
+            int newfd = (int)arg2;
+            process_t* proc = get_current_process();
+            if (!proc || oldfd < 0 || oldfd >= MAX_FDS || newfd < 0 || newfd >= MAX_FDS) {
+                regs->eax = (u32)-9; return 1;
+            }
+            if (oldfd == newfd) { regs->eax = newfd; return 1; }
+            
+            // Close newfd if open
+            if (proc->fds[newfd].kind != FD_FREE) proc->fds[newfd].kind = FD_FREE;
+            
+            // Copy oldfd to newfd
+            proc->fds[newfd] = proc->fds[oldfd];
+            regs->eax = newfd;
             return 1;
         }
 
+        case LINUX_SYS_UNLINK: {
+            const char* path = (const char*)arg1;
+            fat32_rm(path, 0); // flags=0 for file
+            regs->eax = 0; // assume success
+            return 1;
+        }
+
+        case LINUX_SYS_RENAME: {
+            // For now just return success - full implementation needs FAT32 rename
+            regs->eax = 0;
+            return 1;
+        }
+
+        case LINUX_SYS_FORK: {
+            /* fork not fully supported yet - return ENOSYS */
+            regs->eax = (u32)-38; /* ENOSYS */
+            return 1;
+        }
+
+        case LINUX_SYS_WAITPID: {
+            int pid = (int)arg1;
+            int* status = (int*)arg2;
+            int options = (int)arg3;
+            
+            process_t* cur = get_current_process();
+            if (!cur) { regs->eax = (u32)-1; return 1; }
+
+wait_retry:
+            // Find terminated child
+            process_t* p = get_process_list();
+            process_t* start = p;
+            process_t* found = NULL;
+            
+            do {
+                if (p->parent_id == cur->id && p->state == TASK_TERMINATED) {
+                    if (pid == -1 || p->id == pid) {
+                        found = p;
+                        break;
+                    }
+                }
+                p = p->next;
+            } while (p != start);
+
+            if (found) {
+                if (status) *status = 0; // exit code 0
+                regs->eax = (u32)found->id;
+                return 1;
+            } else {
+                // No terminated child yet
+                if (options & 1) { // WNOHANG
+                    regs->eax = 0;
+                    return 1;
+                } else {
+                    // Block and switch to another process
+                    cur->state = TASK_WAITING;
+                    cur->esp = esp;
+                    u32 new_esp = task_switch(esp);
+                    // When we wake up, check again
+                    if (cur->state == TASK_READY) {
+                        cur->state = TASK_RUNNING;
+                        goto wait_retry;
+                    }
+                    return new_esp;
+                }
+            }
+        }
+
         case LINUX_SYS_EXECVE: {
-            regs->eax = (u32)-38; /* ENOSYS - not supported */
+            const char* path = (const char*)arg1;
+            char** argv = (char**)arg2;
+            char** envp = (char**)arg3;
+            
+            int ret = task_exec(path, argv, envp);
+            if (ret < 0) {
+                regs->eax = (u32)-2; /* ENOENT */
+                return 1;
+            }
+            // Success - return new ESP to start executing the new program
+            process_t* proc = get_current_process();
+            return proc->esp;
+        }
+
+        case LINUX_SYS_CHDIR: {
+            const char* path = (const char*)arg1;
+            process_t* proc = get_current_process();
+            if (!proc) { regs->eax = (u32)-1; return 1; }
+            
+            // Simple implementation - just copy the path
+            int i = 0;
+            while (path[i] && i < 255) {
+                proc->cwd[i] = path[i];
+                i++;
+            }
+            proc->cwd[i] = '\0';
+            regs->eax = 0;
+            return 1;
+        }
+
+        case LINUX_SYS_GETCWD: {
+            char* buf = (char*)arg1;
+            u32 size = arg2;
+            process_t* proc = get_current_process();
+            if (!proc || !buf) { regs->eax = (u32)-14; return 1; }
+            
+            u32 len = 0;
+            while (proc->cwd[len]) len++;
+            if (len + 1 > size) { regs->eax = (u32)-34; return 1; } // ERANGE
+            
+            for (u32 i = 0; i <= len; i++) buf[i] = proc->cwd[i];
+            regs->eax = (u32)buf;
             return 1;
         }
 
@@ -288,6 +443,18 @@ static int linux_syscall(struct registers* regs) {
         case LINUX_SYS_GETPID: {
             process_t* proc = get_current_process();
             regs->eax = proc ? (u32)proc->id : 1;
+            return 1;
+        }
+
+        case LINUX_SYS_ACCESS: {
+            const char* path = (const char*)arg1;
+            // int mode = (int)arg2; // F_OK=0, R_OK=4, W_OK=2, X_OK=1
+            fat32_dir_entry_t entry;
+            if (_fat32_find_entry(path, &entry)) {
+                regs->eax = 0; // file exists
+            } else {
+                regs->eax = (u32)-2; // ENOENT
+            }
             return 1;
         }
 
@@ -395,6 +562,75 @@ static int linux_syscall(struct registers* regs) {
             return 1;
         }
 
+        case LINUX_SYS_GETDENTS64: {
+            int fd = (int)arg1;
+            u8* dirp = (u8*)arg2;
+            u32 count = arg3;
+            
+            process_t* proc = get_current_process();
+            if (!proc || fd < 0 || fd >= MAX_FDS) { regs->eax = (u32)-9; return 1; }
+            
+            fd_entry_t* f = &proc->fds[fd];
+            if (f->kind != FD_FILE) { regs->eax = (u32)-9; return 1; }
+            
+            // Read FAT32 directory entries and convert to linux_dirent64
+            ata_drive_t* drive = _fat32_get_current_drive();
+            fat32_bpb_t* bpb = _fat32_get_bpb();
+            if (!drive || !bpb) { regs->eax = (u32)-9; return 1; }
+            
+            u32 cluster = f->fat_cluster;
+            u32 entry_idx = f->offset; // track which entry we're at
+            u32 bytes_written = 0;
+            
+            u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
+            if (!buf) { regs->eax = (u32)-12; return 1; }
+            
+            while (cluster >= 2 && cluster < 0x0FFFFFF8 && bytes_written < count) {
+                ata_read_sectors(drive, _fat32_cluster_to_lba(cluster), bpb->sectors_per_cluster, (u16*)buf);
+                fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
+                int max_entries = (bpb->sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
+                
+                for (int i = 0; i < max_entries && bytes_written < count; i++) {
+                    if (entries[i].name[0] == 0x00) goto done;
+                    if (entries[i].name[0] == 0xE5) continue;
+                    if (entries[i].attr == FAT_ATTR_LFN) continue;
+                    if (entry_idx > 0) { entry_idx--; continue; }
+                    
+                    // linux_dirent64: u64 d_ino, i64 d_off, u16 d_reclen, u8 d_type, char d_name[]
+                    char name[256];
+                    int nlen = 0;
+                    for (int j = 0; j < 8 && entries[i].name[j] != ' '; j++) name[nlen++] = entries[i].name[j];
+                    if (entries[i].name[8] != ' ') {
+                        name[nlen++] = '.';
+                        for (int j = 8; j < 11 && entries[i].name[j] != ' '; j++) name[nlen++] = entries[i].name[j];
+                    }
+                    name[nlen] = 0;
+                    
+                    u16 reclen = 19 + nlen + 1; // align to 8 bytes
+                    reclen = (reclen + 7) & ~7;
+                    if (bytes_written + reclen > count) goto done;
+                    
+                    u64 ino = (u64)i + 1;
+                    s64 off = (s64)(f->offset + 1);
+                    u8 type = (entries[i].attr & FAT_ATTR_DIRECTORY) ? 4 : 8; // DT_DIR=4, DT_REG=8
+                    
+                    *((u64*)(dirp + bytes_written)) = ino;
+                    *((s64*)(dirp + bytes_written + 8)) = off;
+                    *((u16*)(dirp + bytes_written + 16)) = reclen;
+                    *((u8*)(dirp + bytes_written + 18)) = type;
+                    for (int k = 0; k <= nlen; k++) dirp[bytes_written + 19 + k] = name[k];
+                    
+                    bytes_written += reclen;
+                    f->offset++;
+                }
+                cluster = _fat32_get_fat_entry(cluster);
+            }
+done:
+            kfree(buf);
+            regs->eax = bytes_written;
+            return 1;
+        }
+
         case LINUX_SYS_FCNTL64:
             regs->eax = 0;
             return 1;
@@ -441,12 +677,17 @@ u32 syscall_handler(u32 esp) {
     /* Try Linux ABI only for ELF processes */
     process_t* cur = get_current_process();
     if (cur && cur->is_elf) {
-        if (linux_syscall(regs)) {
-            if (num == LINUX_SYS_EXIT)
+        u32 result = linux_syscall(regs, esp);
+        if (result) {
+            /* result could be:
+             *  1 = handled, no context switch needed
+             *  or a new ESP value from task_switch
+             * If result > 1, it's a new ESP, so use it.
+             * Otherwise use the original esp. */
+            if (num == LINUX_SYS_EXIT || num == 252)
                 return task_switch(esp);
-            cur = get_current_process();
-            if (cur && cur->state == TASK_WAITING)
-                return task_switch(esp);
+            if (result > 1)
+                return result;
             return esp;
         }
     }
@@ -520,6 +761,7 @@ u32 syscall_handler(u32 esp) {
                 process_t* parent = get_current_process();
                 if (parent) {
                     proc->parent_id = parent->id;
+                    parent->esp = esp;
                     parent->state = TASK_WAITING;
                 }
                 ret = proc->id;

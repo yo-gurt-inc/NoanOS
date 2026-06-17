@@ -2,6 +2,7 @@
 #include "storage/fat32.h"
 #include "core/malloc.h"
 #include "io/kprint.h"
+#include "io/serial.h"
 #include "cpu/task.h"
 
 /*
@@ -63,29 +64,69 @@ process_t* elf_load_file(const char* path) {
     }
     if (eh.e_machine != 3) { kprint("elf_load: not i386\n"); return NULL; }
 
-    u32 brk = 0;
+    // Calculate total size needed
+    u32 min_addr = 0xFFFFFFFF, max_addr = 0;
+    for (u16 i = 0; i < eh.e_phnum; i++) {
+        elf_ph_t ph;
+        if (elf_read_at(&entry, eh.e_phoff + i * sizeof(ph), (u8*)&ph, sizeof(ph)) < (int)sizeof(ph))
+            continue;
+        if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
+        if (ph.p_vaddr < min_addr) min_addr = ph.p_vaddr;
+        if (ph.p_vaddr + ph.p_memsz > max_addr) max_addr = ph.p_vaddr + ph.p_memsz;
+    }
+    
+    u32 size = max_addr - min_addr;
+    u8* temp = (u8*)kmalloc(size);
+    if (!temp) return NULL;
+    for (u32 i = 0; i < size; i++) temp[i] = 0;
+
+    // Load segments into temp buffer
     for (u16 i = 0; i < eh.e_phnum; i++) {
         elf_ph_t ph;
         if (elf_read_at(&entry, eh.e_phoff + i * sizeof(ph), (u8*)&ph, sizeof(ph)) < (int)sizeof(ph))
             continue;
         if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
 
+        u32 offset = ph.p_vaddr - min_addr;
         if (ph.p_filesz > 0)
-            elf_read_at(&entry, ph.p_offset, (u8*)ph.p_vaddr, ph.p_filesz);
-
-        u8* bss = (u8*)(ph.p_vaddr + ph.p_filesz);
-        for (u32 j = 0; j < ph.p_memsz - ph.p_filesz; j++) bss[j] = 0;
-
-        u32 end = ph.p_vaddr + ph.p_memsz;
-        if (end > brk) brk = end;
+            elf_read_at(&entry, ph.p_offset, temp + offset, ph.p_filesz);
     }
 
-    brk = (brk + 0xFFF) & ~0xFFFu;
+    u32 brk = (max_addr + 0xFFF) & ~0xFFFu;
 
     process_t* proc = task_create((void*)eh.e_entry, 0x1, 0);
-    if (!proc) { kprint("elf_load: task_create failed\n"); return NULL; }
+    if (!proc) { kfree(temp); return NULL; }
     proc->brk_end = brk;
     proc->is_elf  = 1;
+    
+    extern page_dir_t* paging_new_dir(void);
+    extern void paging_map_page(page_dir_t*, u32, u32, u32);
+    extern u32 pmm_alloc(void);
+    
+    proc->page_dir = paging_new_dir();
+    if (!proc->page_dir) {
+        kfree((void*)(proc->kstack - STACK_SIZE));
+        kfree((void*)(proc->ustack - STACK_SIZE));
+        kfree(proc);
+        kfree(temp);
+        return NULL;
+    }
+    
+    // Copy from temp buffer to process-specific pages
+    for (u32 vaddr = min_addr; vaddr < brk; vaddr += 4096) {
+        u32 phys = pmm_alloc();
+        if (!phys) continue;
+        
+        u32 offset = vaddr - min_addr;
+        u8* src = temp + offset;
+        u8* dst = (u8*)phys;
+        u32 copy_len = (offset + 4096 <= size) ? 4096 : (size - offset);
+        for (u32 j = 0; j < copy_len; j++) dst[j] = src[j];
+        for (u32 j = copy_len; j < 4096; j++) dst[j] = 0;
+        
+        paging_map_page(proc->page_dir, vaddr, phys, 0x07);
+    }
 
+    kfree(temp);
     return proc;
 }

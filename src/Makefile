@@ -33,7 +33,7 @@ ASMFLAGS = -f elf32
 # Source files
 BOOT_SRC   = $(BOOT_SRC_DIR)/boot.asm
 KERNEL_ASM = kernel.asm interrupts.asm
-KERNEL_C   = kernel/core/kernel.c kernel/core/malloc.c kernel/core/memory_map.c kernel/core/panic.c kernel/core/initrd.c kernel/core/installer.c \
+KERNEL_C   = kernel/core/kernel.c kernel/core/malloc.c kernel/core/memory_map.c kernel/core/panic.c kernel/core/initrd.c kernel/core/installer.c kernel/core/pmm.c \
              kernel/cpu/gdt.c kernel/cpu/idt.c kernel/cpu/task.c kernel/cpu/syscall.c kernel/cpu/paging.c \
              kernel/io/kprint.c kernel/io/terminal.c kernel/io/keyboard.c kernel/io/framebuffer.c kernel/io/serial.c \
              kernel/storage/ata.c kernel/storage/fat32.c kernel/storage/fat32_fat.c kernel/storage/fat32_path.c kernel/storage/fat32_dir.c kernel/storage/fat32_file.c kernel/storage/elf.c kernel/storage/noan.c \

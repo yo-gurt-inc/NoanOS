@@ -32,6 +32,7 @@ typedef u32 page_dir_t[PD_ENTRIES];
  */
 void        paging_init(void);
 page_dir_t* paging_new_dir(void);
+page_dir_t* paging_clone_dir_cow(page_dir_t* src);
 void        paging_free_dir(page_dir_t* dir);
 void        paging_load_dir(page_dir_t* dir);
 
