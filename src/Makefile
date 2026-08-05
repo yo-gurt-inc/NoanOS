@@ -15,7 +15,7 @@ TOOLS_DIR    = tools
 # musl-linked ELF programs (drop .c files in rootfs_src/)
 MUSL         = /root/NoanOS/musl-noan
 MUSL_CC      = $(CC) -m32 -march=i686 -static -nostdlib \
-               -I$(MUSL)/include -Wl,-Ttext-segment=0x200000 \
+               -I$(MUSL)/include -Wl,-Ttext-segment=0x08000000 \
                $(MUSL)/lib/crt1.o $(MUSL)/lib/crti.o
 MUSL_LIBS    = $(MUSL)/lib/libc.a $(MUSL)/lib/crtn.o -lgcc -lgcc_eh
 ROOTFS_SRCS   = $(wildcard rootfs_src/*.c)
@@ -123,7 +123,7 @@ rootfs/bin/%: rootfs_src/%.c | rootfs/bin
 rootfs/bin/%: rootfs_src/nostdlib/%.c | rootfs/bin
 	@printf "\033[0;36m[ELF]\033[0m Compiling \033[0;36m$*\033[0m\n"
 	@$(CC) -m32 -march=i686 -static -nostdlib -nostartfiles \
-		-Wl,-Ttext-segment=0x200000 $< -o $@
+		-Wl,-Ttext-segment=0x08000000 $< -o $@
 ROOTFS_FILES = $(shell find rootfs -type f 2>/dev/null | grep -v README)
 
 $(INITRD_BIN): $(SH_C_O) $(USER_BINS) $(ROOTFS_FILES) $(ROOTFS_BINS) $(NOSTDLIB_BINS) | $(BUILD_DIR)

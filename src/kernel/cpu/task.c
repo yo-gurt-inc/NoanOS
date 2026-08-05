@@ -258,24 +258,6 @@ process_t* task_fork(struct registers* regs) {
         kfree(u_ptr); kfree(k_ptr); kfree(child);
         return NULL;
     }
-    
-    // Copy program memory NOW (before any scheduling)
-    // Allocate backup buffer, copy parent's memory, child will restore it when it runs
-    if (parent->is_elf && parent->brk_end > 0x08000000 && parent->brk_end < 0x20000000) {
-        u32 size = parent->brk_end - 0x08000000;
-        void* backup = kmalloc(size);
-        if (backup) {
-            // Copy parent's program memory to backup
-            u8* src = (u8*)0x08000000;
-            for (u32 i = 0; i < size; i++) ((u8*)backup)[i] = src[i];
-            
-            // Store backup pointer in child so it can restore it
-            // We'll use a hack: store in unused process field
-            child->page_dir = (page_dir_t*)((u32)child->page_dir | ((u32)backup << 32)); // won't work, need better way
-            // Actually just accept memory sharing for now
-            kfree(backup);
-        }
-    }
 
     // Set return value in child's register state (on its stack)
     struct registers* child_regs = (struct registers*)child->esp;
