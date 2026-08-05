@@ -170,6 +170,10 @@ static u32 linux_syscall(struct registers* regs, u32 esp) {
     serial_puts("[syscall "); serial_dec(num); serial_puts("]\n");
 
     switch (num) {
+        case 0: /* restart_syscall — should never be called by user; return EINTR */
+            regs->eax = (u32)EINTR;
+            return esp;
+
         case LINUX_SYS_EXIT: {
             process_t* cur = get_current_process();
             if (cur) {
@@ -486,9 +490,14 @@ wait_retry:
         case LINUX_SYS_LSEEK: {
             process_t* proc = get_current_process();
             int fd = (int)arg1;
-            u32 offset = arg2;
+            s32 offset = (s32)arg2;   /* signed — negative offsets valid for SEEK_END/SEEK_CUR */
             int whence = (int)arg3;
-            serial_puts("[lseek fd="); serial_dec(fd); serial_puts("]\n");
+
+            serial_puts("[lseek fd="); serial_dec(fd);
+            serial_puts(" offset="); serial_dec(offset);
+            serial_puts(" whence="); serial_dec(whence);
+            serial_puts("]\n");
+
             if (!proc || fd < 0 || fd >= MAX_FDS) { 
                 serial_puts("[lseek: bad fd]\n");
                 regs->eax = (u32)EBADF; return esp; 
@@ -499,20 +508,38 @@ wait_retry:
                 serial_puts("[lseek: not a file]\n");
                 regs->eax = (u32)EBADF; return esp; 
             }
-            if (whence == 0) f->offset = offset;
-            else if (whence == 1) f->offset += offset;
-            else if (whence == 2) f->offset = f->size + offset;
+
+            if (whence == 0)      f->offset = (u32)offset;
+            else if (whence == 1) f->offset = (u32)((s32)f->offset + offset);
+            else if (whence == 2) f->offset = (u32)((s32)f->size   + offset);
+
+            /* Clamp to valid range */
+            if ((s32)f->offset < 0) f->offset = 0;
             if (f->offset > f->size) f->offset = f->size;
+
             regs->eax = f->offset;
             return esp;
         }
 
         case LINUX_SYS_LLSEEK: {
+            /* Linux i386 _llseek ABI:
+             *   EBX = fd
+             *   ECX = offset_high (arg2)
+             *   EDX = offset_low  (arg3)  ← signed
+             *   ESI = result*     (pointer to loff_t output)
+             *   EDI = whence
+             */
             process_t* proc = get_current_process();
             int fd = (int)arg1;
-            u32 offset = arg3;
-            int whence = regs->esi;
-            u32* result = (u32*)regs->edi;
+            s32 offset = (s32)arg3;     /* offset_low  from EDX — signed */
+            int whence = (int)regs->edi; /* whence from EDI (NOT esi) */
+            u32* result = (u32*)regs->esi; /* result* from ESI (NOT edi) */
+
+            serial_puts("[llseek fd="); serial_dec(fd);
+            serial_puts(" offset="); serial_dec(offset);
+            serial_puts(" whence="); serial_dec(whence);
+            serial_puts("]\n");
+
             if (!proc || fd < 0 || fd >= MAX_FDS) { regs->eax = (u32)EBADF; return esp; }
             
             /* Validate result pointer if provided */
@@ -523,10 +550,15 @@ wait_retry:
             
             fd_entry_t* f = &proc->fds[fd];
             if (f->kind != FD_FILE) { regs->eax = (u32)EBADF; return esp; }
-            if (whence == 0) f->offset = offset;
-            else if (whence == 1) f->offset += offset;
-            else if (whence == 2) f->offset = f->size + offset;
-            if (f->offset > f->size) f->offset = f->size;
+
+            if (whence == 0)      f->offset = (u32)offset;
+            else if (whence == 1) f->offset = (u32)((s32)f->offset + offset);
+            else if (whence == 2) f->offset = (u32)((s32)f->size    + offset);
+
+            /* Clamp to valid range */
+            if ((s32)f->offset < 0)       f->offset = 0;
+            if (f->offset > f->size)       f->offset = f->size;
+
             if (result) { result[0] = f->offset; result[1] = 0; }
             regs->eax = 0;
             return esp;
@@ -777,6 +809,37 @@ done:
         case 175: /* rt_sigaction */
         case 174: /* rt_sigprocmask */
             regs->eax = 0;
+            return esp;
+
+        case 265: /* clock_gettime */
+        case 383: /* clock_gettime64 */
+            /* Return zeroed timespec — good enough for musl startup */
+            if (arg2 && is_user_addr_valid(arg2, 8)) {
+                u32* ts = (u32*)arg2;
+                ts[0] = 0; /* tv_sec */
+                ts[1] = 0; /* tv_nsec */
+            }
+            regs->eax = 0;
+            return esp;
+
+        case 240: /* futex */
+            /* musl uses futex for threading; we have no threads, just return ENOSYS */
+            regs->eax = (u32)ENOSYS;
+            return esp;
+
+        case 355: /* getrandom */
+            /* Fill buffer with pseudo-random data (just ticks-based) */
+            if (arg1 && arg2 > 0 && is_user_addr_valid(arg1, arg2)) {
+                u8* buf = (u8*)arg1;
+                u32 len = arg2;
+                extern u32 timer_get_ticks(void);
+                u32 seed = timer_get_ticks();
+                for (u32 i = 0; i < len; i++) {
+                    seed = seed * 1664525 + 1013904223;
+                    buf[i] = (u8)(seed >> 16);
+                }
+            }
+            regs->eax = arg2;
             return esp;
 
         default:

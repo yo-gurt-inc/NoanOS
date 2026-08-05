@@ -13,6 +13,12 @@
 // (all now declared in storage/fat32.h)
 
 static void install_file(const char* name, void* data, u32 size) {
+    /* Remove any existing entry silently so re-installs work cleanly */
+    fat32_dir_entry_t existing;
+    if (_fat32_find_entry(name, &existing)) {
+        fat32_rm(name, 0);
+    }
+
     u32 sectors = (size + 511) / 512;
     u32 first_clus = 0;
     u32 prev_clus = 0;
@@ -165,12 +171,10 @@ int installer_start(u32 boot_drive) {
                     char fullpath[64];
                     int is_elf_file = (name[0] == '/'); // rootfs ELF files stored with full path
                     if (is_elf_file) {
-                        // Use path as-is, create parent dir if needed
+                        // Use path as-is; parent directory already created above
                         int k = 0;
                         while(name[k] && k < 63) { fullpath[k] = name[k]; k++; }
                         fullpath[k] = '\0';
-                        // Ensure parent directory exists (simple: handle /bin/ only for now)
-                        fat32_mkdir("/bin");
                     } else {
                         fullpath[0] = '/'; fullpath[1] = 'b'; fullpath[2] = 'i'; fullpath[3] = 'n'; fullpath[4] = '/';
                         int k = 0;

@@ -15,7 +15,9 @@ static inline int is_kernel_addr(u32 addr) {
 /**
  * Check if a single page at the given virtual address is mapped
  * in the current process's address space.
+ * Reserved for future use with stricter validation.
  */
+__attribute__((unused))
 static int is_page_mapped(u32 vaddr) {
     process_t* proc = get_current_process();
     if (!proc) {

@@ -314,7 +314,26 @@ int task_exec(const char* path, char** argv, char** envp) {
     proc->brk_end = new_proc->brk_end;
     proc->is_elf = new_proc->is_elf;
     proc->eip = new_proc->eip;
-    
+
+    /* Replace the page directory with the new program's page directory.
+     * This is essential — without this the old program's pages remain mapped
+     * and the new EIP points into the wrong address space. */
+    if (proc->page_dir && proc->page_dir != kernel_page_dir) {
+        paging_free_dir(proc->page_dir);
+    }
+    proc->page_dir = new_proc->page_dir;
+    new_proc->page_dir = NULL; /* prevent double-free */
+
+    /* Switch to the new address space immediately */
+    paging_load_dir(proc->page_dir);
+
+    /* Replace user stack with the new process's user stack */
+    if (proc->ustack) {
+        kfree((void*)(proc->ustack - STACK_SIZE));
+    }
+    proc->ustack = new_proc->ustack;
+    new_proc->ustack = 0; /* prevent double-free */
+
     serial_puts("[task_exec: new_proc->eip=");
     serial_hex(new_proc->eip);
     serial_puts(" rebuilding stack]\n");
@@ -326,14 +345,6 @@ int task_exec(const char* path, char** argv, char** envp) {
     *(--stack) = 0x202;             // EFLAGS
     *(--stack) = 0x1B;              // CS
     *(--stack) = new_proc->eip;     // EIP (entry point)
-    
-    serial_puts("[task_exec: pushed EIP=");
-    serial_hex(new_proc->eip);
-    serial_puts(" at stack_addr=");
-    serial_hex((u32)stack);
-    serial_puts(" value_at_stack=");
-    serial_hex(*stack);
-    serial_puts("]\n");
     *(--stack) = 0;                 // err_code
     *(--stack) = 0;                 // int_no
     // pusha registers (8)
@@ -342,9 +353,8 @@ int task_exec(const char* path, char** argv, char** envp) {
     
     proc->esp = (u32)stack;
     
-    // Free the temporary process structures
+    // Free only the temporary kernel stack — page_dir and ustack already transferred above
     kfree((void*)(new_proc->kstack - STACK_SIZE));
-    kfree((void*)(new_proc->ustack - STACK_SIZE));
     kfree(new_proc);
 
     return 0;
