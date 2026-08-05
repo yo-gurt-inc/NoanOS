@@ -27,7 +27,7 @@ High-level architecture (big picture)
   - core entry: kmain(u32 boot_drive) (src/kernel/kernel.c)
   - subsystems present: GDT/TSS, IDT/interrupt handlers, PIT/timer, basic preemptive-like task switching (int 0x20), system calls (int 0x80), simple kmalloc/kfree heap, ATA driver, FAT32 implementation, a simple shell and an installer
   - Task model: process_t and task scheduler in task.c; task_create(entry, flags) — flags bit 0 == user mode (see task_create usage)
-  - User-mode support: simple syscall interface implemented with int 0x80 and a placeholder ELF loader (elf.c)
+  - User-mode support: syscall interface via int 0x80; ELF loader (elf.c) allocates fresh physical frames per-process and maps them into the process's own page directory at whatever vaddr the ELF requests. User binaries are linked at 0x08000000 (per-process virtual address, not the identity-mapped region).
 - Disk images (bin/): boot.bin, kernel.bin, disk.img (live disk), hdd.img (10MB installed HDD). The Makefile composes disk.img by writing the boot sector and kernel.bin to sectors.
 
 Key conventions and repository-specific patterns

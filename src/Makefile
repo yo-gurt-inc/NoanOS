@@ -12,14 +12,31 @@ BOOT_SRC_DIR = boot
 USER_DIR     = user
 TOOLS_DIR    = tools
 
-# musl-linked ELF programs (drop .c files in rootfs_src/)
+# musl-linked ELF programs (drop .c/.cpp files in rootfs_src/)
 MUSL         = /root/NoanOS/musl-noan
 MUSL_CC      = $(CC) -m32 -march=i686 -static -nostdlib \
                -I$(MUSL)/include -Wl,-Ttext-segment=0x08000000 \
                $(MUSL)/lib/crt1.o $(MUSL)/lib/crti.o
 MUSL_LIBS    = $(MUSL)/lib/libc.a $(MUSL)/lib/crtn.o -lgcc -lgcc_eh
+
+GCC_LIB      = /usr/lib/gcc-cross/i686-linux-gnu/14
+CXX_INC      = /usr/i686-linux-gnu/include/c++/14
+SHIM         = $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../musl-noan-cxx-shim)
+MUSL_CXX     = i686-linux-gnu-g++ -m32 -march=i686 -static -nostdlib -nostdinc \
+               -I$(SHIM) \
+               -I$(CXX_INC) -I$(CXX_INC)/i686-linux-gnu \
+               -I$(GCC_LIB)/include \
+               -I$(MUSL)/include \
+               -Wl,-Ttext-segment=0x08000000 \
+               $(MUSL)/lib/crt1.o $(MUSL)/lib/crti.o
+MUSL_CXX_LIBS = $(GCC_LIB)/libstdc++.a $(GCC_LIB)/libsupc++.a \
+                $(MUSL)/lib/libc.a $(MUSL)/lib/libnoan_cxx_stubs.a \
+                $(MUSL)/lib/crtn.o -lgcc -lgcc_eh
+
 ROOTFS_SRCS   = $(wildcard rootfs_src/*.c)
 ROOTFS_BINS   = $(patsubst rootfs_src/%.c,rootfs/bin/%,$(ROOTFS_SRCS))
+ROOTFS_CXX_SRCS = $(wildcard rootfs_src/*.cpp)
+ROOTFS_CXX_BINS = $(patsubst rootfs_src/%.cpp,rootfs/bin/%,$(ROOTFS_CXX_SRCS))
 NOSTDLIB_SRCS = $(wildcard rootfs_src/nostdlib/*.c)
 NOSTDLIB_BINS = $(patsubst rootfs_src/nostdlib/%.c,rootfs/bin/%,$(NOSTDLIB_SRCS))
 NOSTDLIB_SRCS = $(wildcard rootfs_src/nostdlib/*.c)
@@ -120,13 +137,17 @@ rootfs/bin/%: rootfs_src/%.c | rootfs/bin
 	@printf "\033[0;36m[MUSL]\033[0m Compiling \033[0;36m$*\033[0m\n"
 	@$(MUSL_CC) $< $(MUSL_LIBS) -o $@
 
+rootfs/bin/%: rootfs_src/%.cpp | rootfs/bin
+	@printf "\033[0;36m[MUSL C++]\033[0m Compiling \033[0;36m$*\033[0m\n"
+	@$(MUSL_CXX) $< $(MUSL_CXX_LIBS) -o $@
+
 rootfs/bin/%: rootfs_src/nostdlib/%.c | rootfs/bin
 	@printf "\033[0;36m[ELF]\033[0m Compiling \033[0;36m$*\033[0m\n"
 	@$(CC) -m32 -march=i686 -static -nostdlib -nostartfiles \
 		-Wl,-Ttext-segment=0x08000000 $< -o $@
 ROOTFS_FILES = $(shell find rootfs -type f 2>/dev/null | grep -v README)
 
-$(INITRD_BIN): $(SH_C_O) $(USER_BINS) $(ROOTFS_FILES) $(ROOTFS_BINS) $(NOSTDLIB_BINS) | $(BUILD_DIR)
+$(INITRD_BIN): $(SH_C_O) $(USER_BINS) $(ROOTFS_FILES) $(ROOTFS_BINS) $(ROOTFS_CXX_BINS) $(NOSTDLIB_BINS) | $(BUILD_DIR)
 	@printf "\033[0;35m[LD]\033[0m Linking shell...\n"
 	@$(LD) -Ttext 0x800000 --entry _start --oformat binary -m elf_i386 $(SH_C_O) -o $(BUILD_DIR)/shell.bin
 	@printf "\033[0;33m[INITRD]\033[0m Creating Noan Archive (NARC)...\n"
