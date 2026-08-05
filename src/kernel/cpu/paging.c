@@ -13,7 +13,9 @@ page_dir_t* kernel_page_dir = &kernel_dir;
 
 typedef u32 page_table_t[1024] __attribute__((aligned(4096)));
 
-/* Get page table for a virtual address, create if needed */
+/* Get page table for a virtual address, create if needed.
+ * If a 4MB PSE entry exists and create=1, it is replaced with a proper
+ * 4KB page table that identity-maps the same physical range. */
 static page_table_t* get_page_table(page_dir_t* dir, u32 vaddr, int create) {
     u32 pde_idx = vaddr >> 22;
     u32 pde = (*dir)[pde_idx];
@@ -23,12 +25,32 @@ static page_table_t* get_page_table(page_dir_t* dir, u32 vaddr, int create) {
         u32 pt_phys = pmm_alloc();
         if (!pt_phys) return NULL;
         (*dir)[pde_idx] = pt_phys | PDE_PRESENT | PDE_WRITABLE | PDE_USER;
-        // Zero the page table
+        /* Zero the new page table */
         u32* pt = (u32*)pt_phys;
         for (int i = 0; i < 1024; i++) pt[i] = 0;
         return (page_table_t*)pt_phys;
     }
-    
+
+    /* If this is a 4MB PSE entry, we must split it into a real 4KB page table
+     * before we can install individual 4KB mappings inside it.
+     * The 4MB entry maps: pde_idx << 22 .. (pde_idx << 22) + 4MB identity. */
+    if (pde & PDE_4MB) {
+        if (!create) return NULL;
+        u32 pt_phys = pmm_alloc();
+        if (!pt_phys) return NULL;
+        /* Identity-map all 1024 × 4KB pages that this 4MB entry covered */
+        u32* pt = (u32*)pt_phys;
+        u32 base_phys = pde & 0xFFC00000; /* 4MB-aligned physical base */
+        for (int i = 0; i < 1024; i++) {
+            pt[i] = (base_phys + (u32)(i << 12)) | PDE_PRESENT | PDE_WRITABLE | PDE_USER;
+        }
+        /* Replace the 4MB PDE with the new 4KB page table (clear PDE_4MB flag) */
+        (*dir)[pde_idx] = pt_phys | PDE_PRESENT | PDE_WRITABLE | PDE_USER;
+        /* Flush TLB */
+        asm volatile("mov %%cr3, %%eax; mov %%eax, %%cr3" ::: "eax");
+        return (page_table_t*)pt_phys;
+    }
+
     return (page_table_t*)(pde & ~0xFFF);
 }
 

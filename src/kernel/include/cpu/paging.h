@@ -36,6 +36,15 @@ page_dir_t* paging_clone_dir_cow(page_dir_t* src);
 void        paging_free_dir(page_dir_t* dir);
 void        paging_load_dir(page_dir_t* dir);
 
+/* Map a virtual page to a physical page */
+void        paging_map_page(page_dir_t* dir, u32 vaddr, u32 paddr, u32 flags);
+
+/* Get physical address for virtual address (returns 0 if not mapped) */
+u32         paging_get_phys(page_dir_t* dir, u32 vaddr);
+
+/* Copy user memory for fork */
+void        paging_copy_user_memory(page_dir_t* dst, page_dir_t* src, u32 start, u32 end);
+
 /* The kernel's own page directory */
 extern page_dir_t* kernel_page_dir;
 

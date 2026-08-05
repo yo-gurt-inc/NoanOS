@@ -76,6 +76,14 @@ process_t* task_create(void* entry, u32 flags, int parent_id) {
     *(--stack) = (flags & 0x1) ? 0x1B : 0x08; // CS
     *(--stack) = (u32)entry; // EIP
 
+    serial_puts("[task_create: entry=");
+    serial_hex((u32)entry);
+    serial_puts(" stack_addr=");
+    serial_hex((u32)stack);
+    serial_puts(" value_at_stack=");
+    serial_hex(*stack);
+    serial_puts("]\n");
+
     // --- PUSH DUMMY ERROR CODE & INT NO ---
     *(--stack) = 0; // err_code
     *(--stack) = 0; // int_no
@@ -307,6 +315,10 @@ int task_exec(const char* path, char** argv, char** envp) {
     proc->is_elf = new_proc->is_elf;
     proc->eip = new_proc->eip;
     
+    serial_puts("[task_exec: new_proc->eip=");
+    serial_hex(new_proc->eip);
+    serial_puts(" rebuilding stack]\n");
+    
     // Build a fresh kernel stack with iret frame to start new program
     u32* stack = (u32*)proc->kstack;
     *(--stack) = 0x23;              // SS
@@ -314,6 +326,14 @@ int task_exec(const char* path, char** argv, char** envp) {
     *(--stack) = 0x202;             // EFLAGS
     *(--stack) = 0x1B;              // CS
     *(--stack) = new_proc->eip;     // EIP (entry point)
+    
+    serial_puts("[task_exec: pushed EIP=");
+    serial_hex(new_proc->eip);
+    serial_puts(" at stack_addr=");
+    serial_hex((u32)stack);
+    serial_puts(" value_at_stack=");
+    serial_hex(*stack);
+    serial_puts("]\n");
     *(--stack) = 0;                 // err_code
     *(--stack) = 0;                 // int_no
     // pusha registers (8)

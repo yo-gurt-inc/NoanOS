@@ -4,6 +4,8 @@
 #include "io/keyboard.h"
 #include "io/serial.h"
 #include "core/malloc.h"
+#include "core/usermem.h"
+#include "core/errno.h"
 #include "cpu/task.h"
 #include "storage/fat32.h"
 #include "storage/elf.h"
@@ -157,9 +159,9 @@ static int proc_read_fd(int fd, char* buf, u32 count) {
 
 /* -------------------------------------------------------------------------
  * Linux syscall dispatcher — called for any num >= 1 that matches Linux ABI
- * Returns 1 if handled, 0 if not a Linux syscall we know.
+ * Returns esp if handled, 0 if not a Linux syscall we know.
  * ------------------------------------------------------------------------- */
-static int linux_syscall(struct registers* regs, u32 esp) {
+static u32 linux_syscall(struct registers* regs, u32 esp) {
     u32 num  = regs->eax;
     u32 arg1 = regs->ebx;
     u32 arg2 = regs->ecx;
@@ -183,7 +185,7 @@ static int linux_syscall(struct registers* regs, u32 esp) {
                 }
             }
             regs->eax = 0;
-            return 1;
+            return esp;
         }
 
         case 252: /* exit_group — same as exit for single-threaded */
@@ -204,7 +206,7 @@ static int linux_syscall(struct registers* regs, u32 esp) {
                     }
                 }
                 regs->eax = 0;
-                return 1;
+                return esp;
             }
 
         case LINUX_SYS_WRITE: {
@@ -212,50 +214,89 @@ static int linux_syscall(struct registers* regs, u32 esp) {
             u32 fd    = arg1;
             const char* buf = (const char*)arg2;
             u32 count = arg3;
+            
             serial_puts("[write fd="); serial_dec(fd);
             serial_puts(" count="); serial_dec(count);
             serial_puts(" buf="); serial_hex(arg2); serial_puts("]\n");
             
-            /* Validate buffer pointer */
-            if (!buf && count > 0) {
-                regs->eax = (u32)-14; /* EFAULT */
-                return 1;
+            /* Validate buffer pointer and length */
+            if (count > 0 && !is_user_addr_valid((u32)buf, count)) {
+                serial_puts("[write: EFAULT - invalid buffer]\n");
+                regs->eax = (u32)EFAULT;
+                return esp;
             }
             
             if (fd == 1 || fd == 2) {
+                /* stdout/stderr: write directly to terminal
+                 * Buffer is validated, safe to access */
                 terminal_write(buf, count);
                 regs->eax = count;
             } else {
-                regs->eax = (u32)-9; /* EBADF */
+                regs->eax = (u32)EBADF;
             }
-            return 1;
+            return esp;
         }
 
         case 146: { /* writev(fd, iov, iovcnt) */
             u32 fd = arg1;
-            if (fd != 1 && fd != 2) { regs->eax = (u32)-9; return 1; }
+            if (fd != 1 && fd != 2) { regs->eax = (u32)EBADF; return esp; }
+            
             u32* iov   = (u32*)arg2;
             u32 iovcnt = arg3;
+            
+            /* Validate iovec array */
+            if (!is_user_addr_valid((u32)iov, iovcnt * 8)) {
+                regs->eax = (u32)EFAULT;
+                return esp;
+            }
+            
             u32 total  = 0;
             for (u32 i = 0; i < iovcnt; i++) {
                 const char* base = (const char*)iov[i*2];
                 u32 len          = iov[i*2+1];
-                if (base && len) { terminal_write(base, len); total += len; }
+                
+                /* Validate each buffer */
+                if (len > 0 && !is_user_addr_valid((u32)base, len)) {
+                    regs->eax = (u32)EFAULT;
+                    return esp;
+                }
+                
+                if (base && len) { 
+                    terminal_write(base, len); 
+                    total += len; 
+                }
             }
             regs->eax = total;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_READ: {
-            int r = proc_read_fd((int)arg1, (char*)arg2, arg3);
+            char* buf = (char*)arg2;
+            u32 count = arg3;
+            
+            /* Validate destination buffer */
+            if (count > 0 && !is_user_addr_valid((u32)buf, count)) {
+                regs->eax = (u32)EFAULT;
+                return esp;
+            }
+            
+            int r = proc_read_fd((int)arg1, buf, count);
             regs->eax = (u32)r;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_OPEN: {
-            int fd = proc_open((const char*)arg1);
-            regs->eax = (fd >= 0) ? (u32)fd : (u32)-2; /* ENOENT */
-            return 1;
+            const char* path = (const char*)arg1;
+            
+            /* Validate path string */
+            if (!is_user_string_valid(path, 256)) {
+                regs->eax = (u32)EFAULT;
+                return esp;
+            }
+            
+            int fd = proc_open(path);
+            regs->eax = (fd >= 0) ? (u32)fd : (u32)ENOENT;
+            return esp;
         }
 
         case LINUX_SYS_CLOSE: {
@@ -264,7 +305,7 @@ static int linux_syscall(struct registers* regs, u32 esp) {
             if (proc && fd >= 3 && fd < MAX_FDS)
                 proc->fds[fd].kind = FD_FREE;
             regs->eax = 0;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_DUP2: {
@@ -272,9 +313,9 @@ static int linux_syscall(struct registers* regs, u32 esp) {
             int newfd = (int)arg2;
             process_t* proc = get_current_process();
             if (!proc || oldfd < 0 || oldfd >= MAX_FDS || newfd < 0 || newfd >= MAX_FDS) {
-                regs->eax = (u32)-9; return 1;
+                regs->eax = (u32)EBADF; return esp;
             }
-            if (oldfd == newfd) { regs->eax = newfd; return 1; }
+            if (oldfd == newfd) { regs->eax = newfd; return esp; }
             
             // Close newfd if open
             if (proc->fds[newfd].kind != FD_FREE) proc->fds[newfd].kind = FD_FREE;
@@ -282,26 +323,42 @@ static int linux_syscall(struct registers* regs, u32 esp) {
             // Copy oldfd to newfd
             proc->fds[newfd] = proc->fds[oldfd];
             regs->eax = newfd;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_UNLINK: {
             const char* path = (const char*)arg1;
+            
+            /* Validate path string */
+            if (!is_user_string_valid(path, 256)) {
+                regs->eax = (u32)EFAULT;
+                return esp;
+            }
+            
             fat32_rm(path, 0); // flags=0 for file
             regs->eax = 0; // assume success
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_RENAME: {
+            const char* oldpath = (const char*)arg1;
+            const char* newpath = (const char*)arg2;
+            
+            /* Validate path strings */
+            if (!is_user_string_valid(oldpath, 256) || !is_user_string_valid(newpath, 256)) {
+                regs->eax = (u32)EFAULT;
+                return esp;
+            }
+            
             // For now just return success - full implementation needs FAT32 rename
             regs->eax = 0;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_FORK: {
             /* fork not fully supported yet - return ENOSYS */
-            regs->eax = (u32)-38; /* ENOSYS */
-            return 1;
+            regs->eax = (u32)ENOSYS;
+            return esp;
         }
 
         case LINUX_SYS_WAITPID: {
@@ -309,8 +366,14 @@ static int linux_syscall(struct registers* regs, u32 esp) {
             int* status = (int*)arg2;
             int options = (int)arg3;
             
+            /* Validate status pointer if provided */
+            if (status && !is_user_addr_valid((u32)status, sizeof(int))) {
+                regs->eax = (u32)EFAULT;
+                return esp;
+            }
+            
             process_t* cur = get_current_process();
-            if (!cur) { regs->eax = (u32)-1; return 1; }
+            if (!cur) { regs->eax = (u32)ESRCH; return esp; }
 
 wait_retry:
             // Find terminated child
@@ -331,12 +394,12 @@ wait_retry:
             if (found) {
                 if (status) *status = 0; // exit code 0
                 regs->eax = (u32)found->id;
-                return 1;
+                return esp;
             } else {
                 // No terminated child yet
                 if (options & 1) { // WNOHANG
                     regs->eax = 0;
-                    return 1;
+                    return esp;
                 } else {
                     // Block and switch to another process
                     cur->state = TASK_WAITING;
@@ -357,10 +420,19 @@ wait_retry:
             char** argv = (char**)arg2;
             char** envp = (char**)arg3;
             
+            /* Validate path string */
+            if (!is_user_string_valid(path, 256)) {
+                regs->eax = (u32)EFAULT;
+                return esp;
+            }
+            
+            /* For now, argv and envp are not used, so we don't validate them deeply.
+             * In a full implementation, we'd need to validate each pointer in the array. */
+            
             int ret = task_exec(path, argv, envp);
             if (ret < 0) {
-                regs->eax = (u32)-2; /* ENOENT */
-                return 1;
+                regs->eax = (u32)ENOENT;
+                return esp;
             }
             // Success - return new ESP to start executing the new program
             process_t* proc = get_current_process();
@@ -370,7 +442,13 @@ wait_retry:
         case LINUX_SYS_CHDIR: {
             const char* path = (const char*)arg1;
             process_t* proc = get_current_process();
-            if (!proc) { regs->eax = (u32)-1; return 1; }
+            if (!proc) { regs->eax = (u32)ESRCH; return esp; }
+            
+            /* Validate path string */
+            if (!is_user_string_valid(path, 256)) {
+                regs->eax = (u32)EFAULT;
+                return esp;
+            }
             
             // Simple implementation - just copy the path
             int i = 0;
@@ -380,22 +458,29 @@ wait_retry:
             }
             proc->cwd[i] = '\0';
             regs->eax = 0;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_GETCWD: {
             char* buf = (char*)arg1;
             u32 size = arg2;
             process_t* proc = get_current_process();
-            if (!proc || !buf) { regs->eax = (u32)-14; return 1; }
+            if (!proc) { regs->eax = (u32)ESRCH; return esp; }
+            if (!buf) { regs->eax = (u32)EFAULT; return esp; }
+            
+            /* Validate destination buffer */
+            if (!is_user_addr_valid((u32)buf, size)) {
+                regs->eax = (u32)EFAULT;
+                return esp;
+            }
             
             u32 len = 0;
             while (proc->cwd[len]) len++;
-            if (len + 1 > size) { regs->eax = (u32)-34; return 1; } // ERANGE
+            if (len + 1 > size) { regs->eax = (u32)ERANGE; return esp; }
             
             for (u32 i = 0; i <= len; i++) buf[i] = proc->cwd[i];
             regs->eax = (u32)buf;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_LSEEK: {
@@ -406,20 +491,20 @@ wait_retry:
             serial_puts("[lseek fd="); serial_dec(fd); serial_puts("]\n");
             if (!proc || fd < 0 || fd >= MAX_FDS) { 
                 serial_puts("[lseek: bad fd]\n");
-                regs->eax = (u32)-9; return 1; 
+                regs->eax = (u32)EBADF; return esp; 
             }
             fd_entry_t* f = &proc->fds[fd];
             serial_puts("[lseek kind="); serial_dec(f->kind); serial_puts("]\n");
             if (f->kind != FD_FILE) { 
                 serial_puts("[lseek: not a file]\n");
-                regs->eax = (u32)-9; return 1; 
+                regs->eax = (u32)EBADF; return esp; 
             }
             if (whence == 0) f->offset = offset;
             else if (whence == 1) f->offset += offset;
             else if (whence == 2) f->offset = f->size + offset;
             if (f->offset > f->size) f->offset = f->size;
             regs->eax = f->offset;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_LLSEEK: {
@@ -428,34 +513,48 @@ wait_retry:
             u32 offset = arg3;
             int whence = regs->esi;
             u32* result = (u32*)regs->edi;
-            if (!proc || fd < 0 || fd >= MAX_FDS) { regs->eax = (u32)-9; return 1; }
+            if (!proc || fd < 0 || fd >= MAX_FDS) { regs->eax = (u32)EBADF; return esp; }
+            
+            /* Validate result pointer if provided */
+            if (result && !is_user_addr_valid((u32)result, 8)) {
+                regs->eax = (u32)EFAULT;
+                return esp;
+            }
+            
             fd_entry_t* f = &proc->fds[fd];
-            if (f->kind != FD_FILE) { regs->eax = (u32)-9; return 1; }
+            if (f->kind != FD_FILE) { regs->eax = (u32)EBADF; return esp; }
             if (whence == 0) f->offset = offset;
             else if (whence == 1) f->offset += offset;
             else if (whence == 2) f->offset = f->size + offset;
             if (f->offset > f->size) f->offset = f->size;
             if (result) { result[0] = f->offset; result[1] = 0; }
             regs->eax = 0;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_GETPID: {
             process_t* proc = get_current_process();
             regs->eax = proc ? (u32)proc->id : 1;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_ACCESS: {
             const char* path = (const char*)arg1;
             // int mode = (int)arg2; // F_OK=0, R_OK=4, W_OK=2, X_OK=1
+            
+            /* Validate path string */
+            if (!is_user_string_valid(path, 256)) {
+                regs->eax = (u32)EFAULT;
+                return esp;
+            }
+            
             fat32_dir_entry_t entry;
             if (_fat32_find_entry(path, &entry)) {
                 regs->eax = 0; // file exists
             } else {
-                regs->eax = (u32)-2; // ENOENT
+                regs->eax = (u32)ENOENT;
             }
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_BRK: {
@@ -463,7 +562,7 @@ wait_retry:
                If addr > current brk, extend (identity mapped so just update).
                Returns new brk on success. */
             process_t* proc = get_current_process();
-            if (!proc) { regs->eax = (u32)-12; return 1; }
+            if (!proc) { regs->eax = (u32)ENOMEM; return esp; }
             u32 new_brk = arg1;
             if (new_brk == 0) {
                 regs->eax = proc->brk_end;
@@ -479,7 +578,7 @@ wait_retry:
                 proc->brk_end = new_brk;
                 regs->eax = proc->brk_end;
             }
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_MMAP:
@@ -489,7 +588,7 @@ wait_retry:
             process_t* proc = get_current_process();
             /* arg4=flags would be in esi; we assume anonymous */
             u32 len = arg2;
-            if (!proc || len == 0) { regs->eax = (u32)-12; return 1; }
+            if (!proc || len == 0) { regs->eax = (u32)ENOMEM; return esp; }
             /* Round up to 4KB */
             len = (len + 0xFFF) & ~0xFFFu;
             u32 addr = proc->brk_end;
@@ -498,55 +597,77 @@ wait_retry:
             for (u32 i = 0; i < len; i++) p[i] = 0;
             proc->brk_end = addr + len;
             regs->eax = addr;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_MUNMAP:
             regs->eax = 0; /* pretend success */
-            return 1;
+            return esp;
 
         case LINUX_SYS_UNAME: {
             linux_utsname_t* u = (linux_utsname_t*)arg1;
-            if (u) {
-                strcpy_n(u->sysname,    "NoanOS",   65);
-                strcpy_n(u->nodename,   "noan",     65);
-                strcpy_n(u->release,    "1.0.0",    65);
-                strcpy_n(u->version,    "#1",       65);
-                strcpy_n(u->machine,    "i686",     65);
-                strcpy_n(u->domainname, "(none)",   65);
+            
+            /* Validate structure pointer */
+            if (!u || !is_user_addr_valid((u32)u, sizeof(linux_utsname_t))) {
+                regs->eax = (u32)EFAULT;
+                return esp;
             }
+            
+            strcpy_n(u->sysname,    "NoanOS",   65);
+            strcpy_n(u->nodename,   "noan",     65);
+            strcpy_n(u->release,    "1.0.0",    65);
+            strcpy_n(u->version,    "#1",       65);
+            strcpy_n(u->machine,    "i686",     65);
+            strcpy_n(u->domainname, "(none)",   65);
             regs->eax = 0;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_FSTAT64:
             /* Return a zeroed struct — good enough for musl startup checks */
             if (arg2) {
+                /* Validate stat buffer */
+                if (!is_user_addr_valid(arg2, 96)) {
+                    regs->eax = (u32)EFAULT;
+                    return esp;
+                }
                 u8* s = (u8*)arg2;
                 for (int i = 0; i < 96; i++) s[i] = 0;
             }
             regs->eax = 0;
-            return 1;
+            return esp;
 
         case LINUX_SYS_STAT64:
             /* stat64(path, struct stat64*) - return zeroed struct */
+            if (arg1) {
+                /* Validate path string */
+                if (!is_user_string_valid((const char*)arg1, 256)) {
+                    regs->eax = (u32)EFAULT;
+                    return esp;
+                }
+            }
             if (arg2) {
+                /* Validate stat buffer */
+                if (!is_user_addr_valid(arg2, 96)) {
+                    regs->eax = (u32)EFAULT;
+                    return esp;
+                }
                 u8* s = (u8*)arg2;
                 for (int i = 0; i < 96; i++) s[i] = 0;
             }
             regs->eax = 0;
-            return 1;
+            return esp;
 
         case LINUX_SYS_IOCTL:
             regs->eax = 0;
-            return 1;
+            return esp;
 
         case LINUX_SYS_GETUID:
         case LINUX_SYS_GETGID:
         case LINUX_SYS_GETEUID:
         case LINUX_SYS_GETEGID:
             regs->eax = 0; /* root */
-            return 1;
+            return esp;
 
         case LINUX_SYS_SET_TLS: {
             /* set_thread_area(struct user_desc*) — install %gs TLS descriptor.
@@ -559,7 +680,7 @@ wait_retry:
                 gdt_set_tls(base);
             }
             regs->eax = 0;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_GETDENTS64: {
@@ -568,22 +689,28 @@ wait_retry:
             u32 count = arg3;
             
             process_t* proc = get_current_process();
-            if (!proc || fd < 0 || fd >= MAX_FDS) { regs->eax = (u32)-9; return 1; }
+            if (!proc || fd < 0 || fd >= MAX_FDS) { regs->eax = (u32)EBADF; return esp; }
+            
+            /* Validate destination buffer */
+            if (!is_user_addr_valid((u32)dirp, count)) {
+                regs->eax = (u32)EFAULT;
+                return esp;
+            }
             
             fd_entry_t* f = &proc->fds[fd];
-            if (f->kind != FD_FILE) { regs->eax = (u32)-9; return 1; }
+            if (f->kind != FD_FILE) { regs->eax = (u32)EBADF; return esp; }
             
             // Read FAT32 directory entries and convert to linux_dirent64
             ata_drive_t* drive = _fat32_get_current_drive();
             fat32_bpb_t* bpb = _fat32_get_bpb();
-            if (!drive || !bpb) { regs->eax = (u32)-9; return 1; }
+            if (!drive || !bpb) { regs->eax = (u32)EBADF; return esp; }
             
             u32 cluster = f->fat_cluster;
             u32 entry_idx = f->offset; // track which entry we're at
             u32 bytes_written = 0;
             
             u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
-            if (!buf) { regs->eax = (u32)-12; return 1; }
+            if (!buf) { regs->eax = (u32)ENOMEM; return esp; }
             
             while (cluster >= 2 && cluster < 0x0FFFFFF8 && bytes_written < count) {
                 ata_read_sectors(drive, _fat32_cluster_to_lba(cluster), bpb->sectors_per_cluster, (u16*)buf);
@@ -628,21 +755,21 @@ wait_retry:
 done:
             kfree(buf);
             regs->eax = bytes_written;
-            return 1;
+            return esp;
         }
 
         case LINUX_SYS_FCNTL64:
             regs->eax = 0;
-            return 1;
+            return esp;
 
         case LINUX_SYS_CLONE:
             /* fork/thread — return ENOSYS for now */
-            regs->eax = (u32)-38;
-            return 1;
+            regs->eax = (u32)ENOSYS;
+            return esp;
 
         case 258: /* set_tid_address */
             regs->eax = get_current_process() ? (u32)get_current_process()->id : 1;
-            return 1;
+            return esp;
 
         case 67:  /* sigaction */
         case 126: /* sigprocmask */
@@ -650,15 +777,15 @@ done:
         case 175: /* rt_sigaction */
         case 174: /* rt_sigprocmask */
             regs->eax = 0;
-            return 1;
+            return esp;
 
         default:
             {
                 process_t* cur2 = get_current_process();
                 if (cur2 && cur2->is_elf) {
                     serial_puts("[elf unknown syscall "); serial_dec(num); serial_puts("]\n");
-                    regs->eax = (u32)-38; /* ENOSYS */
-                    return 1;
+                    regs->eax = (u32)ENOSYS;
+                    return esp;
                 }
             }
             return 0; /* not a Linux syscall we handle */
@@ -671,6 +798,14 @@ u32 syscall_handler(u32 esp) {
     u32 arg1 = regs->ebx;
     u32 arg2 = regs->ecx;
     u32 arg3 = regs->edx;
+
+    serial_puts("[syscall_handler: num=");
+    serial_dec(num);
+    serial_puts(" EIP=");
+    serial_hex(regs->eip);
+    serial_puts(" EAX=");
+    serial_hex(regs->eax);
+    serial_puts("]\n");
 
     int ret = 0;
 
@@ -772,6 +907,11 @@ u32 syscall_handler(u32 esp) {
         }
 
         case SYS_PRINT:
+            /* Validate string pointer */
+            if (!is_user_string_valid((const char*)arg1, 4096)) {
+                ret = EFAULT;
+                break;
+            }
             kprint((const char*)arg1);
             break;
         case SYS_READ:
@@ -801,9 +941,17 @@ u32 syscall_handler(u32 esp) {
             fat32_ls();
             break;
         case SYS_CD:
+            if (!is_user_string_valid((const char*)arg1, 256)) {
+                ret = EFAULT;
+                break;
+            }
             fat32_cd((const char*)arg1);
             break;
         case SYS_CAT:
+            if (!is_user_string_valid((const char*)arg1, 256)) {
+                ret = EFAULT;
+                break;
+            }
             fat32_cat((const char*)arg1);
             break;
         case SYS_PUTCHAR:
@@ -821,36 +969,86 @@ u32 syscall_handler(u32 esp) {
             shutdown();
             break;
         case SYS_MKDIR:
+            if (!is_user_string_valid((const char*)arg1, 256)) {
+                ret = EFAULT;
+                break;
+            }
             fat32_mkdir((const char*)arg1);
             break;
         case SYS_RM:
+            if (!is_user_string_valid((const char*)arg1, 256)) {
+                ret = EFAULT;
+                break;
+            }
             fat32_rm((const char*)arg1, (int)arg2);
             break;
         case SYS_TOUCH:
+            if (!is_user_string_valid((const char*)arg1, 256)) {
+                ret = EFAULT;
+                break;
+            }
             fat32_touch((const char*)arg1);
             break;
         case SYS_ECHO_FILE:
+            if (!is_user_string_valid((const char*)arg1, 256) || 
+                !is_user_string_valid((const char*)arg2, 4096)) {
+                ret = EFAULT;
+                break;
+            }
             fat32_echo((const char*)arg1, (const char*)arg2, (int)arg3);
             break;
         case SYS_CP:
+            if (!is_user_string_valid((const char*)arg1, 256) || 
+                !is_user_string_valid((const char*)arg2, 256)) {
+                ret = EFAULT;
+                break;
+            }
             fat32_copy((const char*)arg1, (const char*)arg2);
             break;
         case SYS_MV:
+            if (!is_user_string_valid((const char*)arg1, 256) || 
+                !is_user_string_valid((const char*)arg2, 256)) {
+                ret = EFAULT;
+                break;
+            }
             fat32_move((const char*)arg1, (const char*)arg2);
             break;
         case SYS_READ_FILE:
+            if (!is_user_string_valid((const char*)arg1, 256) ||
+                !is_user_addr_valid(arg2, arg3)) {
+                ret = EFAULT;
+                break;
+            }
             ret = fat32_read((const char*)arg1, (char*)arg2, arg3);
             break;
         case SYS_PANIC:
+            if (!is_user_string_valid((const char*)arg1, 256)) {
+                panic("Invalid panic message pointer");
+                break;
+            }
             panic((const char*)arg1);
             break;
         case SYS_GET_TIME:
+            if (!is_user_addr_valid(arg1, 1) || !is_user_addr_valid(arg2, 1) || 
+                !is_user_addr_valid(arg3, 1)) {
+                ret = EFAULT;
+                break;
+            }
             rtc_get_time((u8*)arg1, (u8*)arg2, (u8*)arg3);
             break;
         case SYS_GET_DATE:
+            if (!is_user_addr_valid(arg1, 1) || !is_user_addr_valid(arg2, 1) || 
+                !is_user_addr_valid(arg3, 2)) {
+                ret = EFAULT;
+                break;
+            }
             rtc_get_date((u8*)arg1, (u8*)arg2, (u16*)arg3);
             break;
         case SYS_MEM_INFO:
+            if (!is_user_addr_valid(arg1, sizeof(malloc_info_t))) {
+                ret = EFAULT;
+                break;
+            }
             get_malloc_info((malloc_info_t*)arg1);
             break;
         case SYS_LIST_DISKS:

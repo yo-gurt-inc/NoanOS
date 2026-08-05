@@ -94,8 +94,16 @@ process_t* elf_load_file(const char* path) {
 
     u32 brk = (max_addr + 0xFFF) & ~0xFFFu;
 
+    serial_puts("[ELF: e_entry=");
+    serial_hex(eh.e_entry);
+    serial_puts("]\n");
+
     process_t* proc = task_create((void*)eh.e_entry, 0x1, 0);
     if (!proc) { kfree(temp); return NULL; }
+    
+    serial_puts("[ELF: proc->eip after task_create=");
+    serial_hex(proc->eip);
+    serial_puts("]\n");
     proc->brk_end = brk;
     proc->is_elf  = 1;
     

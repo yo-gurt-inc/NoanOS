@@ -129,6 +129,7 @@ common_stub:
 
     popa
     add esp, 8          ; Clean up int_no and err_code
+    
     sti
     iret
 

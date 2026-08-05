@@ -268,3 +268,17 @@ u32 irq_handler(u32 esp) {
     
     return esp;
 }
+
+void debug_iret_frame(u32 eip, u32 cs, u32 eflags, u32 useresp, u32 ss) {
+    serial_puts("[IRET frame: EIP=");
+    serial_hex(eip);
+    serial_puts(" CS=");
+    serial_hex(cs);
+    serial_puts(" EFLAGS=");
+    serial_hex(eflags);
+    serial_puts(" ESP=");
+    serial_hex(useresp);
+    serial_puts(" SS=");
+    serial_hex(ss);
+    serial_puts("]\n");
+}
