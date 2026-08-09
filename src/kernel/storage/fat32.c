@@ -27,6 +27,15 @@ void         _fat32_set_current_dir_cluster(u32 c){ current_dir_cluster = c; }
 ata_drive_t* _fat32_get_current_drive(void)      { return current_drive; }
 fat32_bpb_t* _fat32_get_bpb(void)               { return &bpb; }
 
+// Persistent buffers (allocated once per mount)
+static u8* sector_buf = NULL;   // 512 bytes
+static u8* cluster_buf = NULL;  // sectors_per_cluster * 512
+static u32 cluster_buf_size = 0;
+
+u8* _fat32_get_sector_buf(void) { return sector_buf; }
+u8* _fat32_get_cluster_buf(void) { return cluster_buf; }
+u32 _fat32_get_cluster_buf_size(void) { return cluster_buf_size; }
+
 // ============================================================================
 // PUBLIC API: Initialize FAT32 from a drive
 // ============================================================================
@@ -43,6 +52,22 @@ void fat32_init(ata_drive_t* drive) {
     fat_start_sector  = bpb.reserved_sector_count;
     data_start_sector = bpb.reserved_sector_count + (bpb.num_fats * bpb.sectors_per_fat_32);
     current_dir_cluster = bpb.root_cluster;
+
+    // Allocate persistent buffers if not already present
+    if (!sector_buf) {
+        sector_buf = (u8*)kmalloc(512);
+        if (sector_buf) {
+            for (int i = 0; i < 512; i++) sector_buf[i] = 0;
+        }
+    }
+    if (!cluster_buf) {
+        u32 spc = bpb.sectors_per_cluster ? bpb.sectors_per_cluster : 1;
+        cluster_buf_size = spc * 512;
+        cluster_buf = (u8*)kmalloc(cluster_buf_size);
+        if (cluster_buf) {
+            for (u32 i = 0; i < cluster_buf_size; i++) cluster_buf[i] = 0;
+        }
+    }
 
     kprint("FAT32 Initialized on "); kprint(drive->name); kprint("\n");
     kprint("  OEM Name: ");

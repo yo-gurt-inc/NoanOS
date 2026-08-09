@@ -75,6 +75,11 @@ void fat32_copy(const char* src, const char* dest);
 void fat32_move(const char* src, const char* dest);
 int fat32_read(const char* name, char* buffer, u32 max_len);
 
+/* fd-based write for the Linux open()/write() syscall path.
+ * fat_entry_ptr is actually an fd_entry_t* (from cpu/task.h).
+ * Using void* here to avoid a circular header dependency. */
+int fat32_write_fd(void* fd_entry_ptr, const char* buf, u32 len);
+
 /* Internal accessors shared across fat32_*.c modules */
 u32          _fat32_get_fat_start(void);
 u32          _fat32_get_data_start(void);
@@ -90,5 +95,10 @@ void         _fat32_name_to_83(const char* name, u8* dest);
 int          _fat32_find_entry(const char* name, fat32_dir_entry_t* out_entry);
 void         _fat32_create_entry(const char* name, u8 attr, u32 first_cluster, u32 size);
 int          _fat32_find_full_path_file(const char* path, fat32_dir_entry_t* out_entry);
+
+/* Persistent buffers allocated at fat32_init */
+u8*          _fat32_get_sector_buf(void);
+u8*          _fat32_get_cluster_buf(void);
+u32          _fat32_get_cluster_buf_size(void);
 
 #endif

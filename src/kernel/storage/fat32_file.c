@@ -66,12 +66,15 @@ int fat32_read(const char* name, char* buffer, u32 max_len) {
     
     u32 total_read = 0;
 
-    // Allocate a reusable cluster-sized buffer on first use to avoid frequent kmallocs
-    static u8* cluster_buf = NULL;
+    // Prefer shared persistent cluster buffer allocated by fat32_init
+    u8* cluster_buf = _fat32_get_cluster_buf();
+    u32 cluster_bytes = _fat32_get_cluster_buf_size();
+
     u32 sectors_per_cluster = bpb ? bpb->sectors_per_cluster : 1;
     if (sectors_per_cluster == 0 || sectors_per_cluster > 128) sectors_per_cluster = 1;
-    u32 cluster_bytes = sectors_per_cluster * 512;
     if (!cluster_buf) {
+        /* Fallback: allocate local cluster buffer if persistent one isn't present */
+        cluster_bytes = sectors_per_cluster * 512;
         cluster_buf = (u8*)kmalloc(cluster_bytes);
         if (!cluster_buf) return -1;
     }
