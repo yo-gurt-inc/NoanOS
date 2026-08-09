@@ -101,4 +101,12 @@ u8*          _fat32_get_sector_buf(void);
 u8*          _fat32_get_cluster_buf(void);
 u32          _fat32_get_cluster_buf_size(void);
 
+/* Read-ahead buffer (prefetch next N clusters) */
+u8*          _fat32_get_readahead_buf(void);
+u32          _fat32_get_readahead_buf_size(void);
+
+#ifndef READAHEAD_CLUSTERS
+#define READAHEAD_CLUSTERS 1
+#endif
+
 #endif

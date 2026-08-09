@@ -4,6 +4,7 @@
 #include "io/kprint.h"
 #include "io/terminal.h"
 #include "core/malloc.h"
+#include <stdbool.h>
 extern int _fat32_find_entry(const char* name, fat32_dir_entry_t* out_entry);
 extern u32 _fat32_get_fat_entry(u32 cluster);
 extern u32 _fat32_find_free_cluster(void);
@@ -79,14 +80,45 @@ int fat32_read(const char* name, char* buffer, u32 max_len) {
         if (!cluster_buf) return -1;
     }
 
-    // Read cluster-by-cluster using multi-sector ATA reads
+    // Read cluster-by-cluster using multi-sector ATA reads with simple read-ahead
+    u8* readahead_buf = _fat32_get_readahead_buf();
+    u32 readahead_size = _fat32_get_readahead_buf_size();
+    u32 prefetched_cluster = 0xFFFFFFFF;
+
     while (total_read < size && cluster < 0x0FFFFFF8 && cluster >= 2) {
-        ata_read_sectors(drive, _fat32_cluster_to_lba(cluster), (u8)sectors_per_cluster, (u16*)cluster_buf);
+        u8* curr_buf = cluster_buf;
+        bool used_prefetch = false;
+
+        // If the cluster was prefetched, use readahead buffer
+        if (readahead_buf && cluster == prefetched_cluster) {
+            curr_buf = readahead_buf; // prefetched data starts at offset 0
+            used_prefetch = true;
+        } else {
+            // Read current cluster normally
+            ata_read_sectors(drive, _fat32_cluster_to_lba(cluster), (u8)sectors_per_cluster, (u16*)curr_buf);
+        }
+
         u32 copy_bytes = (size - total_read) < cluster_bytes ? (size - total_read) : cluster_bytes;
         for (u32 i = 0; i < copy_bytes && total_read < size; i++) {
-            buffer[total_read++] = (char)cluster_buf[i];
+            buffer[total_read++] = (char)curr_buf[i];
         }
-        cluster = _fat32_get_fat_entry(cluster);
+
+        // Determine next cluster in chain
+        u32 next_cluster = _fat32_get_fat_entry(cluster);
+
+        // If next cluster looks valid, try to prefetch it into readahead_buf
+        if (readahead_buf && next_cluster >= 2 && next_cluster < 0x0FFFFFF8) {
+            // Only prefetch if we didn't already have it prefetched
+            if (!used_prefetch || prefetched_cluster != next_cluster) {
+                // Read next cluster into readahead_buf
+                ata_read_sectors(drive, _fat32_cluster_to_lba(next_cluster), (u8)sectors_per_cluster, (u16*)readahead_buf);
+                prefetched_cluster = next_cluster;
+            }
+        } else {
+            prefetched_cluster = 0xFFFFFFFF;
+        }
+
+        cluster = next_cluster;
     }
 
     return total_read;

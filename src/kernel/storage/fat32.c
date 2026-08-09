@@ -31,10 +31,15 @@ fat32_bpb_t* _fat32_get_bpb(void)               { return &bpb; }
 static u8* sector_buf = NULL;   // 512 bytes
 static u8* cluster_buf = NULL;  // sectors_per_cluster * 512
 static u32 cluster_buf_size = 0;
+static u8* readahead_buf = NULL; // READAHEAD_CLUSTERS * cluster_buf_size
+static u32 readahead_buf_size = 0;
 
 u8* _fat32_get_sector_buf(void) { return sector_buf; }
 u8* _fat32_get_cluster_buf(void) { return cluster_buf; }
 u32 _fat32_get_cluster_buf_size(void) { return cluster_buf_size; }
+
+u8* _fat32_get_readahead_buf(void) { return readahead_buf; }
+u32 _fat32_get_readahead_buf_size(void) { return readahead_buf_size; }
 
 // ============================================================================
 // PUBLIC API: Initialize FAT32 from a drive
@@ -66,6 +71,15 @@ void fat32_init(ata_drive_t* drive) {
         cluster_buf = (u8*)kmalloc(cluster_buf_size);
         if (cluster_buf) {
             for (u32 i = 0; i < cluster_buf_size; i++) cluster_buf[i] = 0;
+        }
+    }
+    if (!readahead_buf) {
+        if (cluster_buf_size > 0) {
+            readahead_buf_size = cluster_buf_size * READAHEAD_CLUSTERS;
+            readahead_buf = (u8*)kmalloc(readahead_buf_size);
+            if (readahead_buf) {
+                for (u32 i = 0; i < readahead_buf_size; i++) readahead_buf[i] = 0;
+            }
         }
     }
 
