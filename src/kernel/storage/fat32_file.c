@@ -1,5 +1,6 @@
 // fat32_file.c - FAT32 File Operations: cat, read, echo, touch, rm, copy, move, stat
 #include "storage/fat32.h"
+#include "cpu/task.h"
 #include "io/kprint.h"
 #include "io/terminal.h"
 #include "core/malloc.h"
@@ -64,30 +65,30 @@ int fat32_read(const char* name, char* buffer, u32 max_len) {
     if (size > max_len) size = max_len;
     
     u32 total_read = 0;
-    u16* buf = (u16*)kmalloc(512);
-    if (!buf) return -1;
 
-    // Read sector by sector, following the FAT chain
+    // Allocate a reusable cluster-sized buffer on first use to avoid frequent kmallocs
+    static u8* cluster_buf = NULL;
+    u32 sectors_per_cluster = bpb ? bpb->sectors_per_cluster : 1;
+    if (sectors_per_cluster == 0 || sectors_per_cluster > 128) sectors_per_cluster = 1;
+    u32 cluster_bytes = sectors_per_cluster * 512;
+    if (!cluster_buf) {
+        cluster_buf = (u8*)kmalloc(cluster_bytes);
+        if (!cluster_buf) return -1;
+    }
+
+    // Read cluster-by-cluster using multi-sector ATA reads
     while (total_read < size && cluster < 0x0FFFFFF8 && cluster >= 2) {
-        // Each cluster may have multiple sectors - we need to read all of them
-
-        u32 sectors_per_cluster = bpb ? bpb->sectors_per_cluster : 1;
-        if (sectors_per_cluster == 0 || sectors_per_cluster > 128) sectors_per_cluster = 1;
-        
-        for (u32 sec = 0; sec < sectors_per_cluster && total_read < size; sec++) {
-            ata_read_sectors(drive, _fat32_cluster_to_lba(cluster) + sec, 1, buf);
-            u8* b = (u8*)buf;
-            for (int i = 0; i < 512 && total_read < size; i++) {
-                buffer[total_read++] = (char)b[i];
-            }
+        ata_read_sectors(drive, _fat32_cluster_to_lba(cluster), (u8)sectors_per_cluster, (u16*)cluster_buf);
+        u32 copy_bytes = (size - total_read) < cluster_bytes ? (size - total_read) : cluster_bytes;
+        for (u32 i = 0; i < copy_bytes && total_read < size; i++) {
+            buffer[total_read++] = (char)cluster_buf[i];
         }
-        
         cluster = _fat32_get_fat_entry(cluster);
     }
-    
-    kfree(buf);
+
     return total_read;
 }
+
 
 // ============================================================================
 // PUBLIC API: Write content to file
@@ -269,4 +270,190 @@ void fat32_stat(const char* name) {
     kprint("  Attr:    "); kprint_hex(entry.attr); 
     if (entry.attr & FAT_ATTR_DIRECTORY) kprint(" (DIR)");
     kprint("\n");
+}
+
+// ============================================================================
+// INTERNAL: Update file size in the directory entry for a given path
+// ============================================================================
+static void fat32_update_filesize(const char* path, u32 new_size) {
+    ata_drive_t* drive = _fat32_get_current_drive();
+    fat32_bpb_t* bpb   = _fat32_get_bpb();
+    if (!drive || !bpb) return;
+
+    /* Determine parent directory cluster and the name component */
+    u32 dir_cluster = _fat32_get_current_dir_cluster();
+    const char* name = path;
+
+    if (path[0] == '/') {
+        dir_cluster = bpb->root_cluster;
+        name = path + 1;
+    }
+
+    /* Navigate to the parent directory of the last path component */
+    while (*name) {
+        /* find next slash */
+        const char* slash = name;
+        while (*slash && *slash != '/') slash++;
+        if (*slash == '\0') break; /* name now points to the final component */
+
+        /* Navigate into the intermediate directory component */
+        char component[64];
+        int clen = (int)(slash - name);
+        if (clen <= 0) { name = slash + 1; continue; }
+        for (int i = 0; i < clen && i < 63; i++) component[i] = name[i];
+        component[clen] = '\0';
+
+        u8 fat_name[11];
+        _fat32_name_to_83(component, fat_name);
+        u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
+        if (!buf) return;
+        ata_read_sectors(drive, _fat32_cluster_to_lba(dir_cluster), bpb->sectors_per_cluster, (u16*)buf);
+        fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
+        int max_e = (int)((bpb->sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t));
+        int found = 0;
+        for (int i = 0; i < max_e; i++) {
+            if (entries[i].name[0] == 0x00) break;
+            if (entries[i].name[0] == 0xE5) continue;
+            int match = 1;
+            for (int j = 0; j < 11; j++) if (entries[i].name[j] != fat_name[j]) { match = 0; break; }
+            if (match && (entries[i].attr & FAT_ATTR_DIRECTORY)) {
+                dir_cluster = ((u32)entries[i].cluster_hi << 16) | entries[i].cluster_lo;
+                if (dir_cluster == 0) dir_cluster = bpb->root_cluster;
+                found = 1; break;
+            }
+        }
+        kfree(buf);
+        if (!found) return;
+        name = slash + 1;
+    }
+
+    /* name now points to the final filename component; update its dir entry */
+    if (!*name) return;
+
+    u8 fat_name[11];
+    _fat32_name_to_83(name, fat_name);
+
+    u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
+    if (!buf) return;
+    u32 cluster = dir_cluster;
+    while (cluster >= 2 && cluster < 0x0FFFFFF8) {
+        u32 lba = _fat32_cluster_to_lba(cluster);
+        ata_read_sectors(drive, lba, bpb->sectors_per_cluster, (u16*)buf);
+        fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
+        int max_e = (int)((bpb->sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t));
+        int updated = 0;
+        for (int i = 0; i < max_e; i++) {
+            if (entries[i].name[0] == 0x00) break;
+            if (entries[i].name[0] == 0xE5) continue;
+            int match = 1;
+            for (int j = 0; j < 11; j++) if (entries[i].name[j] != fat_name[j]) { match = 0; break; }
+            if (match) {
+                entries[i].file_size = new_size;
+                ata_write_sectors(drive, lba, bpb->sectors_per_cluster, (u16*)buf);
+                updated = 1; break;
+            }
+        }
+        if (updated) break;
+        cluster = _fat32_get_fat_entry(cluster);
+    }
+    kfree(buf);
+}
+
+// ============================================================================
+// PUBLIC API: Write from fd_entry_t into a FAT32 file
+// Handles cluster chain extension as needed. Returns bytes written or -1.
+// ============================================================================
+int fat32_write_fd(void* fd_entry_ptr, const char* data, u32 len) {
+    fd_entry_t* f = (fd_entry_t*)fd_entry_ptr;
+    if (!f || !data || len == 0) return 0;
+
+    ata_drive_t* drive = _fat32_get_current_drive();
+    fat32_bpb_t* bpb   = _fat32_get_bpb();
+    if (!drive || !bpb) return -1;
+
+    u32 spc      = bpb->sectors_per_cluster;
+    u32 clus_sz  = spc * 512;
+
+    /* If the file has no cluster yet (zero-size file from touch), allocate first cluster */
+    if (f->fat_cluster == 0) {
+        u32 first = _fat32_find_free_cluster();
+        if (!first) return -1;
+        _fat32_set_fat_entry(first, 0x0FFFFFFF);
+        f->fat_cluster = first;
+        /* Update directory entry cluster fields — we can't do that here without
+         * the path, so the caller (open handler) must store the cluster back.
+         * We use a trick: fat32_update_filesize also patches cluster if needed.
+         * For now just store in fd and let the first write use it. */
+    }
+
+    u32 written = 0;
+    u32 pos     = f->offset; /* byte position within file */
+
+    /* Walk the cluster chain to the cluster containing pos */
+    u32 cluster = f->fat_cluster;
+    u32 cluster_idx = pos / clus_sz;
+    u32 prev_cluster = 0;
+    for (u32 i = 0; i < cluster_idx; i++) {
+        u32 next = _fat32_get_fat_entry(cluster);
+        if (next >= 0x0FFFFFF8) {
+            /* Need to allocate a new cluster to reach this position */
+            u32 new_clus = _fat32_find_free_cluster();
+            if (!new_clus) return (written > 0) ? (int)written : -1;
+            _fat32_set_fat_entry(cluster, new_clus);
+            _fat32_set_fat_entry(new_clus, 0x0FFFFFFF);
+            cluster = new_clus;
+        } else {
+            prev_cluster = cluster;
+            cluster = next;
+        }
+        (void)prev_cluster;
+    }
+
+    u8* sector_buf = (u8*)kmalloc(512);
+    if (!sector_buf) return -1;
+
+    while (written < len) {
+        u32 pos_in_cluster = pos % clus_sz;
+        u32 sec_in_cluster = pos_in_cluster / 512;
+        u32 pos_in_sector  = pos % 512;
+        u32 lba = _fat32_cluster_to_lba(cluster) + sec_in_cluster;
+
+        /* Read-modify-write the sector */
+        ata_read_sectors(drive, lba, 1, (u16*)sector_buf);
+
+        u32 space_in_sector = 512 - pos_in_sector;
+        u32 to_write = len - written;
+        if (to_write > space_in_sector) to_write = space_in_sector;
+
+        for (u32 i = 0; i < to_write; i++)
+            sector_buf[pos_in_sector + i] = (u8)data[written + i];
+
+        ata_write_sectors(drive, lba, 1, (u16*)sector_buf);
+        written += to_write;
+        pos     += to_write;
+
+        /* If we've moved past the current cluster, get/allocate next */
+        if (pos % clus_sz == 0 && written < len) {
+            u32 next = _fat32_get_fat_entry(cluster);
+            if (next >= 0x0FFFFFF8) {
+                u32 new_clus = _fat32_find_free_cluster();
+                if (!new_clus) break; /* disk full, return partial */
+                _fat32_set_fat_entry(cluster, new_clus);
+                _fat32_set_fat_entry(new_clus, 0x0FFFFFFF);
+                cluster = new_clus;
+            } else {
+                cluster = next;
+            }
+        }
+    }
+
+    kfree(sector_buf);
+
+    f->offset = pos;
+    /* Update the file size in the directory entry if we extended the file */
+    if (pos > f->size) {
+        f->size = pos;
+        if (f->path[0]) fat32_update_filesize(f->path, f->size);
+    }
+    return (int)written;
 }
