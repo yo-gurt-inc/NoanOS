@@ -126,23 +126,39 @@ int installer_start(u32 boot_drive) {
             kprint("Installing NoanOS to "); kprint(dest->name); kprint("...\n");
             kprint("Copying 700 sectors (Boot + Kernel + Initrd)...\n");
 
-            u16* buf = (u16*)kmalloc(512);
+            /* Batch buffer: adjustable sectors per operation.
+             * Larger batches reduce the number of PIO commands and improve throughput.
+             * Choose a conservative default (64 sectors = 32 KiB) to balance memory and speed.
+             */
+            #define INSTALL_BATCH_SECTORS 64
+            u16* buf = (u16*)kmalloc(INSTALL_BATCH_SECTORS * 512);
             u16* bpb_buf = (u16*)kmalloc(512);
-            ata_read_sectors(dest, 0, 1, bpb_buf);
+            ata_read_sectors(dest, 0, 1, bpb_buf);  /* save dest BPB for patching */
 
-            for (int i = 0; i < 700; i++) {
-                ata_read_sectors(src, i, 1, buf);
+            const int total_sectors = 700;
+            for (int i = 0; i < total_sectors; ) {
+                int batch = total_sectors - i;
+                if (batch > INSTALL_BATCH_SECTORS) batch = INSTALL_BATCH_SECTORS;
+
+                ata_read_sectors(src, (u32)i, (u8)batch, buf);
+
+                /* Patch sector 0: preserve the dest FAT32 BPB (bytes 3–89)
+                 * so the filesystem geometry isn't overwritten by the boot code. */
                 if (i == 0) {
                     u8* boot_code = (u8*)buf;
-                    u8* bpb_data = (u8*)bpb_buf;
+                    u8* bpb_data  = (u8*)bpb_buf;
                     for (int j = 3; j < 90; j++) boot_code[j] = bpb_data[j];
                 }
-                ata_write_sectors(dest, i, 1, buf);
-                if (i % 32 == 0) { kprint_dec(i); kprint(" "); }
+
+                ata_write_sectors(dest, (u32)i, (u8)batch, buf);
+
+                i += batch;
+                if ((i % (INSTALL_BATCH_SECTORS * 2)) == 0 || i >= total_sectors) { kprint_dec(i); kprint(" "); }
             }
 
             kfree(buf);
             kfree(bpb_buf);
+            #undef INSTALL_BATCH_SECTORS
 
             kprint("\nFinalizing File System...\n");
             fat32_init(dest);
