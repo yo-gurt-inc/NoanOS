@@ -1,0 +1,26 @@
+Benchmark of image: bin/hdd.img
+Sizes: small=1KiB, medium=64KiB, large=1MiB
+
+Chunk size: 1024 bytes
+  reads: 102400
+  bytes_read: 104857600
+  total_time_s: 0.298798
+  throughput_mb_s: 334.674
+  avg_latency_ms: 0.002
+  p95_latency_ms: 0.002
+
+Chunk size: 65536 bytes
+  reads: 1600
+  bytes_read: 104857600
+  total_time_s: 0.019654
+  throughput_mb_s: 5088.034
+  avg_latency_ms: 0.011
+  p95_latency_ms: 0.017
+
+Chunk size: 1048576 bytes
+  reads: 100
+  bytes_read: 104857600
+  total_time_s: 0.015124
+  throughput_mb_s: 6611.798
+  avg_latency_ms: 0.149
+  p95_latency_ms: 0.202
