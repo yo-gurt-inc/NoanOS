@@ -4,6 +4,7 @@
 #include "core/types.h"
 
 void kprint_init(void);
+void terminal_set_serial_mirror(int enable);
 void terminal_scroll(void);
 void terminal_putchar(char c);
 void terminal_backspace(void);

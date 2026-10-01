@@ -10,6 +10,11 @@ static process_t* process_list = NULL;
 static process_t* current_process = NULL;
 static int next_pid = 1;
 
+/* When nonzero, task_switch does not log to serial. The 100 Hz timer prints a
+ * ~50 byte line per switch; the COM1 busy-wait throttles the whole guest, so
+ * automated test runs (AUTO/TEST mode) silence it. */
+int task_switch_quiet = 0;
+
 void task_init(void) {
     current_process = (process_t*)kmalloc(sizeof(process_t));
     current_process->id = next_pid++;
@@ -180,11 +185,13 @@ u32 task_switch(u32 esp) {
     current_process = next;
     current_process->state = TASK_RUNNING;
 
-    serial_puts("[task_switch: switching to pid=");
-    serial_dec(next->id);
-    serial_puts(" esp=");
-    serial_hex(next->esp);
-    serial_puts("]\n");
+    if (!task_switch_quiet) {
+        serial_puts("[task_switch: switching to pid=");
+        serial_dec(next->id);
+        serial_puts(" esp=");
+        serial_hex(next->esp);
+        serial_puts("]\n");
+    }
 
     tss_set_stack(current_process->kstack);
 
@@ -335,6 +342,22 @@ int task_exec(const char* path, char** argv, char** envp) {
     
     proc->esp = (u32)stack;
     
+    /* Unlink the temporary process from the process list before freeing it:
+     * elf_load_file's task_create added it, and leaving a freed node linked
+     * makes later list walks (exit -> wake parent, task_switch) hit reused
+     * memory once kmalloc hands that block out again. */
+    {
+        process_t* iter = process_list;
+        while (iter->next != new_proc) {
+            iter = iter->next;
+            if (iter == process_list) break; /* not found: safety */
+        }
+        if (iter->next == new_proc) iter->next = new_proc->next;
+        if (process_list == new_proc) {
+            process_list = (new_proc->next == new_proc) ? NULL : new_proc->next;
+        }
+    }
+
     // Free only the temporary kernel stack — page_dir and ustack already transferred above
     kfree((void*)(new_proc->kstack - STACK_SIZE));
     kfree(new_proc);

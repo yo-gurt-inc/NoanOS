@@ -1,15 +1,41 @@
 #include "io/kprint.h"
 #include "io/terminal.h"
 #include "io/io.h"
+#include "io/serial.h"
 
 #define VGA_WIDTH 80
 #define VGA_HEIGHT 25
 #define VGA_MEMORY 0xB8000
+#define MIRROR_BUF_SIZE 512
 
 static u16* terminal_buffer;
 static u8 terminal_row;
 static u8 terminal_column;
 static u8 terminal_color;
+
+// Serial mirror: echo rendered (non-escape) screen output to COM1 so headless
+// test runs can observe program output. Lines are buffered and flushed whole
+// through the serial TX lock on '\n' (or when the buffer fills / mirror off).
+static int serial_mirror_enabled = 0;
+static char mirror_buf[MIRROR_BUF_SIZE];
+static u32 mirror_len = 0;
+
+static void mirror_flush(void) {
+    if (mirror_len > 0) {
+        serial_mirror_write(mirror_buf, mirror_len);
+        mirror_len = 0;
+    }
+}
+
+void terminal_set_serial_mirror(int enable) {
+    if (enable) {
+        mirror_len = 0;
+        serial_mirror_enabled = 1;
+    } else {
+        serial_mirror_enabled = 0;
+        mirror_flush();
+    }
+}
 
 // ANSI parsing state
 static int ansi_state = 0;
@@ -73,6 +99,23 @@ void terminal_set_color(u8 color) {
 }
 
 void terminal_putchar(char c) {
+    // Serial mirror: only characters that will actually be rendered (not ANSI
+    // control sequences) are echoed, as whole lines. '\b' pops the last char
+    // instead of appending, '\r' alone is dropped (the '\n' flush ends lines).
+    if (serial_mirror_enabled && ansi_state == 0) {
+        if (c == '\n') {
+            mirror_flush();
+            serial_mirror_write("\n", 1);
+        } else if (c == '\033') {
+            /* escape sequence start; content is skipped until parser resets */
+        } else if (c == '\b') {
+            if (mirror_len > 0) mirror_len--;
+        } else if (c != '\r') {
+            if (mirror_len >= MIRROR_BUF_SIZE - 1) mirror_flush();
+            mirror_buf[mirror_len++] = c;
+        }
+    }
+
     // Basic ANSI escape sequence parser
     if (ansi_state == 0) {
         if (c == '\033') {

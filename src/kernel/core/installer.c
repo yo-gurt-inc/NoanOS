@@ -6,11 +6,14 @@
 #include "storage/fat32.h"
 #include "core/malloc.h"
 #include "io/io.h"
+#include "io/serial.h"
 #include "system/timer.h"
 #include "core/initrd.h"
 
-// Forward declarations for FAT32 internal helpers needed for installation
-// (all now declared in storage/fat32.h)
+// Boot-mode marker lives at INSTALLER_MARKER_SECTOR (700) of the boot drive:
+// outside the initrd on the live disk (LBA 121-632) and inside the FAT32
+// reserved region on the installed disk, so neither the filesystem nor the
+// 700-sector installer copy ever touches it.
 
 static void install_file(const char* name, void* data, u32 size) {
     /* Remove any existing entry silently so re-installs work cleanly */
@@ -62,7 +65,167 @@ static void reboot_os(void) {
         good = inb(0x64);
     outb(0x64, 0xFE);
     // The CPU should reset here, but if it doesn't, we halt.
-    asm volatile("hlt"); 
+    asm volatile("hlt");
+}
+
+/* Shared install routine (identical for manual and auto installs):
+   format dest, copy 700 sectors of src (preserving dest's BPB bytes 3-89),
+   mount dest, create /bin, install every initrd file, write the boot-mode
+   marker at INSTALLER_MARKER_SECTOR on dest (zeros, or "TEST" when
+   test_marker is set — this is what makes an auto-installed disk run the
+   test suite on its next boot). */
+static void do_install(ata_drive_t* dest, ata_drive_t* src, int test_marker) {
+    fat32_format(dest);
+
+    kprint("Installing NoanOS to "); kprint(dest->name); kprint("...\n");
+    kprint("Copying 700 sectors (Boot + Kernel + Initrd)...\n");
+
+    u16* buf = (u16*)kmalloc(512);
+    u16* bpb_buf = (u16*)kmalloc(512);
+    ata_read_sectors(dest, 0, 1, bpb_buf);
+
+    for (int i = 0; i < 700; i++) {
+        ata_read_sectors(src, i, 1, buf);
+        if (i == 0) {
+            u8* boot_code = (u8*)buf;
+            u8* bpb_data = (u8*)bpb_buf;
+            for (int j = 3; j < 90; j++) boot_code[j] = bpb_data[j];
+        }
+        ata_write_sectors(dest, i, 1, buf);
+        if (i % 32 == 0) { kprint_dec(i); kprint(" "); }
+    }
+
+    kfree(buf);
+    kfree(bpb_buf);
+
+    kprint("\nFinalizing File System...\n");
+    fat32_init(dest);
+
+    // Create /bin directory
+    fat32_mkdir("/bin");
+
+    // Write boot-mode marker on installed disk (zeros, or TEST in test mode)
+    {
+        u16* clearbuf = (u16*)kmalloc(512);
+        if (clearbuf) {
+            u8* cb = (u8*)clearbuf;
+            for (int _i = 0; _i < 512; _i++) cb[_i] = 0;
+            if (test_marker) {
+                cb[0] = 'T'; cb[1] = 'E'; cb[2] = 'S'; cb[3] = 'T';
+            }
+            ata_write_sectors(dest, INSTALLER_MARKER_SECTOR, 1, clearbuf);
+            kfree(clearbuf);
+        }
+    }
+
+    // Automatically install all files from initrd with NOAN wrapping to /bin
+    int file_count = initrd_get_file_count();
+    for (int i = 0; i < file_count; i++) {
+        char name[32];
+        u32 size;
+        void* data = initrd_get_file(i, name, &size);
+        if (data) {
+            char fullpath[64];
+            int is_elf_file = (name[0] == '/'); // rootfs ELF files stored with full path
+            if (is_elf_file) {
+                // Use path as-is; parent directory already created above
+                int k = 0;
+                while(name[k] && k < 63) { fullpath[k] = name[k]; k++; }
+                fullpath[k] = '\0';
+            } else {
+                fullpath[0] = '/'; fullpath[1] = 'b'; fullpath[2] = 'i'; fullpath[3] = 'n'; fullpath[4] = '/';
+                int k = 0;
+                while(name[k] && k < 32) { fullpath[k+5] = name[k]; k++; }
+                fullpath[k+5] = '\0';
+            }
+
+            kprint("  Installing "); kprint(fullpath); kprint("...\n");
+
+            if (is_elf_file) {
+                // ELF binary — write raw, no NOAN header
+                install_file(fullpath, data, size);
+            } else if (size >= 4 &&
+                       ((u8*)data)[0] == 0x4E && ((u8*)data)[1] == 0x41 &&
+                       ((u8*)data)[2] == 0x4F && ((u8*)data)[3] == 0x4E) {
+                // Already NOAN-wrapped (user programs come out of the initrd
+                // pre-wrapped by mknoan.py; 0x4E414F4E are the magic bytes
+                // on disk, little-endian 0x4E4F414E) — write raw.
+                // Re-wrapping would double the header and shift every
+                // load-relative data reference by 16 bytes.
+                install_file(fullpath, data, size);
+            } else {
+            // Wrap the remaining binaries (shell is stored raw in the
+            // initrd) into NOAN format
+            u32 magic = 0x4E4F414E; // 'NOAN'
+            u32 entry_off = 16;
+            u32 code_size = size;
+            u32 data_size = 0;
+            u8* header = (u8*)kmalloc(16 + size);
+            if (header) {
+                header[0] = (u8)(magic & 0xFF);
+                header[1] = (u8)((magic>>8)&0xFF);
+                header[2] = (u8)((magic>>16)&0xFF);
+                header[3] = (u8)((magic>>24)&0xFF);
+                header[4] = (u8)(entry_off & 0xFF);
+                header[5] = (u8)((entry_off>>8)&0xFF);
+                header[6] = (u8)((entry_off>>16)&0xFF);
+                header[7] = (u8)((entry_off>>24)&0xFF);
+                header[8] = (u8)(code_size & 0xFF);
+                header[9] = (u8)((code_size>>8)&0xFF);
+                header[10] = (u8)((code_size>>16)&0xFF);
+                header[11] = (u8)((code_size>>24)&0xFF);
+                header[12] = (u8)(data_size & 0xFF);
+                header[13] = (u8)((data_size>>8)&0xFF);
+                header[14] = (u8)((data_size>>16)&0xFF);
+                header[15] = (u8)((data_size>>24)&0xFF);
+                for (u32 m = 0; m < (u32)size; m++) header[16 + m] = ((u8*)data)[m];
+
+                install_file(fullpath, header, 16 + size);
+                kfree(header);
+            } else {
+                install_file(fullpath, data, size);
+            }
+            } // end !is_elf_file
+        }
+    }
+
+    // Reset current dir cluster to root for safety
+    {
+        fat32_bpb_t* bpb = _fat32_get_bpb();
+        _fat32_set_current_dir_cluster(bpb->root_cluster);
+    }
+
+    kprint("\nSuccess! NoanOS and all commands are now installed.\n");
+}
+
+int installer_auto(u32 boot_drive) {
+    int boot_idx = (boot_drive >= 0x80) ? (boot_drive - 0x80) : 0;
+
+    // Pick the first existing drive that is not the boot drive.
+    ata_drive_t* dest = NULL;
+    for (int i = 0; i < 4; i++) {
+        ata_drive_t* d = ata_get_drive(i);
+        if (d && d->exists && i != boot_idx) {
+            dest = d;
+            break;
+        }
+    }
+    if (!dest) {
+        serial_puts("[AUTOINSTALL] no target drive found\n");
+        return -1;
+    }
+
+    ata_drive_t* src = ata_get_drive(boot_idx);
+    serial_puts("[AUTOINSTALL] target=");
+    serial_puts(dest->name);
+    serial_puts("\n");
+
+    kprint_init();
+    do_install(dest, src, 1);
+
+    serial_puts("[AUTOINSTALL] done\n");
+    reboot_os();
+    return 1;
 }
 
 int installer_start(u32 boot_drive) {
@@ -70,7 +233,7 @@ int installer_start(u32 boot_drive) {
     kprint("======================================\n");
     kprint("         NoanOS Installation Menu     \n");
     kprint("======================================\n\n");
-    
+
     int boot_idx = (boot_drive >= 0x80) ? (boot_drive - 0x80) : 0;
 
     kprint("Detected Drives:\n");
@@ -84,21 +247,21 @@ int installer_start(u32 boot_drive) {
             kprint("\n");
         }
     }
-    
+
     kprint("\nOptions:\n");
     kprint(" [0-3] Select TARGET drive to INSTALL OS\n");
     kprint(" [L]   Run LIVE MODE (Skip Installation)\n");
     kprint("\nSelection: ");
-    
+
     char choice = wait_for_key();
     terminal_putchar(choice);
     kprint("\n");
-    
+
     if (choice == 'L' || choice == 'l') {
         kprint("Starting Live Mode...\n");
         return 0; // Did not install
     }
-    
+
     if (choice >= '0' && choice <= '3') {
         int idx = choice - '0';
         ata_drive_t* dest = ata_get_drive(idx);
@@ -121,114 +284,8 @@ int installer_start(u32 boot_drive) {
         terminal_putchar(confirm);
         kprint("\n");
         if (confirm == 'y' || confirm == 'Y') {
-            fat32_format(dest); 
+            do_install(dest, src, 0);
 
-            kprint("Installing NoanOS to "); kprint(dest->name); kprint("...\n");
-            kprint("Copying 700 sectors (Boot + Kernel + Initrd)...\n");
-
-            u16* buf = (u16*)kmalloc(512);
-            u16* bpb_buf = (u16*)kmalloc(512);
-            ata_read_sectors(dest, 0, 1, bpb_buf);
-
-            for (int i = 0; i < 700; i++) {
-                ata_read_sectors(src, i, 1, buf);
-                if (i == 0) {
-                    u8* boot_code = (u8*)buf;
-                    u8* bpb_data = (u8*)bpb_buf;
-                    for (int j = 3; j < 90; j++) boot_code[j] = bpb_data[j];
-                }
-                ata_write_sectors(dest, i, 1, buf);
-                if (i % 32 == 0) { kprint_dec(i); kprint(" "); }
-            }
-
-            kfree(buf);
-            kfree(bpb_buf);
-
-            kprint("\nFinalizing File System...\n");
-            fat32_init(dest);
-            
-            // Create /bin directory
-            fat32_mkdir("/bin");
-            
-            // Clear LIVE signature on installed disk (sector 255)
-            {
-                u16* clearbuf = (u16*)kmalloc(512);
-                if (clearbuf) {
-                    u8* cb = (u8*)clearbuf;
-                    for (int _i = 0; _i < 512; _i++) cb[_i] = 0;
-                    ata_write_sectors(dest, 255, 1, clearbuf);
-                    kfree(clearbuf);
-                }
-            }
-
-            // Automatically install all files from initrd with NOAN wrapping to /bin
-            int file_count = initrd_get_file_count();
-            for (int i = 0; i < file_count; i++) {
-                char name[32];
-                u32 size;
-                void* data = initrd_get_file(i, name, &size);
-                if (data) {
-                    char fullpath[64];
-                    int is_elf_file = (name[0] == '/'); // rootfs ELF files stored with full path
-                    if (is_elf_file) {
-                        // Use path as-is; parent directory already created above
-                        int k = 0;
-                        while(name[k] && k < 63) { fullpath[k] = name[k]; k++; }
-                        fullpath[k] = '\0';
-                    } else {
-                        fullpath[0] = '/'; fullpath[1] = 'b'; fullpath[2] = 'i'; fullpath[3] = 'n'; fullpath[4] = '/';
-                        int k = 0;
-                        while(name[k] && k < 32) { fullpath[k+5] = name[k]; k++; }
-                        fullpath[k+5] = '\0';
-                    }
-                    
-                    kprint("  Installing "); kprint(fullpath); kprint("...\n");
-
-                    if (is_elf_file) {
-                        // ELF binary — write raw, no NOAN header
-                        install_file(fullpath, data, size);
-                    } else {
-                    // Wrap all binaries (shell and user commands) into NOAN format
-                    u32 magic = 0x4E4F414E; // 'NOAN'
-                    u32 entry_off = 16;
-                    u32 code_size = size;
-                    u32 data_size = 0;
-                    u8* header = (u8*)kmalloc(16 + size);
-                    if (header) {
-                        header[0] = (u8)(magic & 0xFF);
-                        header[1] = (u8)((magic>>8)&0xFF);
-                        header[2] = (u8)((magic>>16)&0xFF);
-                        header[3] = (u8)((magic>>24)&0xFF);
-                        header[4] = (u8)(entry_off & 0xFF);
-                        header[5] = (u8)((entry_off>>8)&0xFF);
-                        header[6] = (u8)((entry_off>>16)&0xFF);
-                        header[7] = (u8)((entry_off>>24)&0xFF);
-                        header[8] = (u8)(code_size & 0xFF);
-                        header[9] = (u8)((code_size>>8)&0xFF);
-                        header[10] = (u8)((code_size>>16)&0xFF);
-                        header[11] = (u8)((code_size>>24)&0xFF);
-                        header[12] = (u8)(data_size & 0xFF);
-                        header[13] = (u8)((data_size>>8)&0xFF);
-                        header[14] = (u8)((data_size>>16)&0xFF);
-                        header[15] = (u8)((data_size>>24)&0xFF);
-                        for (u32 m = 0; m < (u32)size; m++) header[16 + m] = ((u8*)data)[m];
-                        
-                        install_file(fullpath, header, 16 + size);
-                        kfree(header);
-                    } else {
-                        install_file(fullpath, data, size);
-                    }
-                    } // end !is_elf_file
-                }
-            }
-
-            // Reset current dir cluster to root for safety
-            {
-                fat32_bpb_t* bpb = _fat32_get_bpb();
-                _fat32_set_current_dir_cluster(bpb->root_cluster);
-            }
-
-            kprint("\nSuccess! NoanOS and all commands are now installed.\n");
             kprint("Press any key to reboot...");
             wait_for_key();
             reboot_os();

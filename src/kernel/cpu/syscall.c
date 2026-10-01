@@ -616,14 +616,20 @@ wait_retry:
         case LINUX_SYS_MMAP:
         case LINUX_SYS_MMAP2: {
             /* Minimal mmap: anonymous fixed allocation via brk extension.
-               musl uses mmap for large allocations. We only handle MAP_ANONYMOUS. */
+               musl uses mmap for large allocations. We only handle
+               MAP_ANONYMOUS. On i386, mmap2 (192) takes the length in 4096
+               byte pages; legacy mmap (90) takes bytes. */
             process_t* proc = get_current_process();
             /* arg4=flags would be in esi; we assume anonymous */
             u32 len = arg2;
             if (!proc || len == 0) { regs->eax = (u32)ENOMEM; return esp; }
+            if (num == LINUX_SYS_MMAP2) len *= 4096;
             /* Round up to 4KB */
             len = (len + 0xFFF) & ~0xFFFu;
-            u32 addr = proc->brk_end;
+            /* Start at the next page boundary: mallocng derives group slot
+             * addresses arithmetically from the mmap base and traps (hlt ->
+             * #GP) when it is not page-aligned. */
+            u32 addr = (proc->brk_end + 0xFFF) & ~0xFFFu;
             /* Zero the region */
             u8* p = (u8*)addr;
             for (u32 i = 0; i < len; i++) p[i] = 0;
@@ -757,14 +763,10 @@ wait_retry:
                     
                     // linux_dirent64: u64 d_ino, i64 d_off, u16 d_reclen, u8 d_type, char d_name[]
                     char name[256];
+                    _fat32_entry_full_name(entries, i, name, sizeof(name));
                     int nlen = 0;
-                    for (int j = 0; j < 8 && entries[i].name[j] != ' '; j++) name[nlen++] = entries[i].name[j];
-                    if (entries[i].name[8] != ' ') {
-                        name[nlen++] = '.';
-                        for (int j = 8; j < 11 && entries[i].name[j] != ' '; j++) name[nlen++] = entries[i].name[j];
-                    }
-                    name[nlen] = 0;
-                    
+                    while (name[nlen]) nlen++;
+
                     u16 reclen = 19 + nlen + 1; // align to 8 bytes
                     reclen = (reclen + 7) & ~7;
                     if (bytes_written + reclen > count) goto done;
@@ -910,9 +912,15 @@ u32 syscall_handler(u32 esp) {
             return task_switch(esp);
 
         case SYS_EXEC: {
+            process_t* parent = get_current_process();
             u32 entry = noan_load((const char*)arg1);
             if (entry) {
                 keyboard_set_enabled(1);
+                /* Save the parent's syscall frame so it resumes right after
+                 * this syscall when the child terminates (noan_execute parks
+                 * the parent in TASK_WAITING; mirrors SYS_EXEC_ELF). Without
+                 * this the parent wakes on a stale frame. */
+                if (parent) parent->esp = esp;
                 noan_execute(entry, (const char*)arg1);
                 keyboard_flush();
                 ret = 0;
@@ -966,6 +974,62 @@ u32 syscall_handler(u32 esp) {
             } else {
                 ret = -1;
             }
+            break;
+        }
+
+        case SYS_READDIR: {
+            /* Native-ABI directory listing: readdir(path, index, name_out).
+             * Returns 1 and writes the index-th file entry's full name
+             * (VFAT long filename when present) to name_out, 0 at end of
+             * directory, -1 on error. Each call re-walks the directory from
+             * the start (index is a cursor). */
+            const char* path = (const char*)arg1;
+            u32 index = arg2;
+            char* name_out = (char*)arg3;
+
+            if (!is_user_string_valid(path, 256) ||
+                !is_user_addr_valid((u32)name_out, 256)) {
+                ret = -1;
+                break;
+            }
+
+            fat32_dir_entry_t de;
+            if (!_fat32_find_entry(path, &de)) { ret = -1; break; }
+
+            ata_drive_t* drive = _fat32_get_current_drive();
+            fat32_bpb_t* bpb = _fat32_get_bpb();
+            if (!drive || !bpb) { ret = -1; break; }
+
+            u32 cluster = ((u32)de.cluster_hi << 16) | de.cluster_lo;
+            if (cluster == 0) cluster = bpb->root_cluster;
+
+            u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
+            if (!buf) { ret = -1; break; }
+
+            u32 count = 0;
+            int found = 0;
+            while (cluster >= 2 && cluster < 0x0FFFFFF8) {
+                ata_read_sectors(drive, _fat32_cluster_to_lba(cluster),
+                                 bpb->sectors_per_cluster, (u16*)buf);
+                fat32_dir_entry_t* entries = (fat32_dir_entry_t*)buf;
+                int max_entries = (bpb->sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
+
+                for (int i = 0; i < max_entries; i++) {
+                    if (entries[i].name[0] == 0x00) goto readdir_done;
+                    if (entries[i].name[0] == 0xE5) continue;      /* deleted */
+                    if (entries[i].attr == FAT_ATTR_LFN) continue; /* LFN part */
+                    if (entries[i].attr & FAT_ATTR_DIRECTORY) continue; /* . .. subdirs */
+                    if (count++ != index) continue;
+
+                    _fat32_entry_full_name(entries, i, name_out, 256);
+                    found = 1;
+                    goto readdir_done;
+                }
+                cluster = _fat32_get_fat_entry(cluster);
+            }
+readdir_done:
+            kfree(buf);
+            ret = found ? 1 : 0;
             break;
         }
 

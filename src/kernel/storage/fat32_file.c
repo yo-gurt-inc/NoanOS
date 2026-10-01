@@ -147,13 +147,10 @@ void fat32_rm(const char* name, int flags) {
     ata_drive_t* drive = _fat32_get_current_drive();
     if (!drive) return;
 
-    u8 fat_name[11];
-    _fat32_name_to_83(name, fat_name);
-
     fat32_bpb_t* bpb = _fat32_get_bpb();
     u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
     if (!buf) return;
-    
+
     u32 current_cluster = _fat32_get_current_dir_cluster();
     u32 dir_lba = _fat32_cluster_to_lba(current_cluster);
     ata_read_sectors(drive, dir_lba, bpb->sectors_per_cluster, (u16*)buf);
@@ -162,25 +159,36 @@ void fat32_rm(const char* name, int flags) {
 
     for (int i = 0; i < max_entries; i++) {
         if (entries[i].name[0] == 0x00) break;
-        int match = 1;
-        for(int j=0; j<11; j++) if(entries[i].name[j] != fat_name[j]) match = 0;
-        
-        if (match) {
-            u32 cluster = ((u32)entries[i].cluster_hi << 16) | entries[i].cluster_lo;
-            
-            while (cluster > 0 && cluster < 0x0FFFFFF8) {
-                u32 next = _fat32_get_fat_entry(cluster);
-                _fat32_set_fat_entry(cluster, 0);
-                cluster = next;
-            }
+        if (entries[i].name[0] == 0xE5) continue;
+        if (entries[i].attr == FAT_ATTR_LFN) continue;
+        if (!_fat32_entry_matches(entries, i, name)) continue;
 
-            entries[i].name[0] = 0xE5;
-            ata_write_sectors(drive, dir_lba, bpb->sectors_per_cluster, (u16*)buf);
-            
-            if (!(flags & 1)) { kprint("Deleted: "); kprint(name); kprint("\n"); }
-            kfree(buf);
-            return;
+        /* Free the file's cluster chain */
+        u32 cluster = ((u32)entries[i].cluster_hi << 16) | entries[i].cluster_lo;
+        while (cluster > 0 && cluster < 0x0FFFFFF8) {
+            u32 next = _fat32_get_fat_entry(cluster);
+            _fat32_set_fat_entry(cluster, 0);
+            cluster = next;
         }
+
+        /* Mark the 8.3 entry deleted, then its LFN run above it (checksum
+         * must be computed from the alias before it is modified) */
+        u8 sum = 0;
+        for (int j = 0; j < 11; j++) {
+            sum = (u8)(((sum & 1) ? 0x80 : 0) + (sum >> 1) + entries[i].name[j]);
+        }
+        entries[i].name[0] = 0xE5;
+        for (int t = i - 1; t >= 0; t--) {
+            if (entries[t].attr != FAT_ATTR_LFN) break;
+            if (((u8*)&entries[t])[13] != sum) break;
+            entries[t].name[0] = 0xE5;
+            if (((u8*)&entries[t])[0] & 0x40) break; /* top of the run */
+        }
+        ata_write_sectors(drive, dir_lba, bpb->sectors_per_cluster, (u16*)buf);
+
+        if (!(flags & 1)) { kprint("Deleted: "); kprint(name); kprint("\n"); }
+        kfree(buf);
+        return;
     }
     if (!(flags & 1)) kprint("No such file or directory \n");
     kfree(buf);

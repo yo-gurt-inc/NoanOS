@@ -64,7 +64,7 @@ int fat32_format(ata_drive_t* drive) {
 
     fat32_bpb_t* f = (fat32_bpb_t*)buf;
     f->boot_jmp[0] = 0xEB; f->boot_jmp[1] = 0x3C; f->boot_jmp[2] = 0x90;
-    for (int i = 0; i < 8; i++) f->oem_name[i]    = "SIMPLEOS"[i];
+    for (int i = 0; i < 8; i++) f->oem_name[i]    = "NOANOS"[i];
     f->bytes_per_sector   = 512;
     f->sectors_per_cluster = 8;
     f->reserved_sector_count = 704;
@@ -75,7 +75,7 @@ int fat32_format(ata_drive_t* drive) {
     f->root_cluster       = 2;
     f->boot_signature     = 0x29;
     f->volume_id          = 0x12345678;
-    for (int i = 0; i < 11; i++) f->volume_label[i] = "SIMPLE OS  "[i];
+    for (int i = 0; i < 11; i++) f->volume_label[i] = "NOAN OS  "[i];
     for (int i = 0; i < 8;  i++) f->fs_type[i]      = "FAT32   "[i];
     f->boot_sig_2         = 0xAA55;
 

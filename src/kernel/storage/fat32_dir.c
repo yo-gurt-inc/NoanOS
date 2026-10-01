@@ -38,17 +38,11 @@ void fat32_ls(void) {
             if (entries[i].name[0] == 0x00) { kfree(buf); if (count == 0) kprint("\n"); return; }
             if (entries[i].name[0] == 0xE5) continue;
             if (entries[i].attr == FAT_ATTR_LFN) continue;
-            
+
             count++;
-            for (int j = 0; j < 8; j++) {
-                if (entries[i].name[j] != ' ') terminal_putchar(entries[i].name[j]);
-            }
-            if (entries[i].name[8] != ' ') {
-                terminal_putchar('.');
-                for (int j = 8; j < 11; j++) {
-                    if (entries[i].name[j] != ' ') terminal_putchar(entries[i].name[j]);
-                }
-            }
+            char namebuf[256];
+            _fat32_entry_full_name(entries, i, namebuf, sizeof(namebuf));
+            kprint(namebuf);
             if (entries[i].attr & FAT_ATTR_DIRECTORY) {
                 kprint("/");
             }
@@ -77,9 +71,6 @@ void fat32_cd(const char* name) {
         return;
     }
 
-    u8 fat_name[11];
-    _fat32_name_to_83(name, fat_name);
-
     fat32_bpb_t* bpb = _fat32_get_bpb();
     u8* buf = (u8*)kmalloc(bpb->sectors_per_cluster * 512);
     if (!buf) return;
@@ -90,9 +81,11 @@ void fat32_cd(const char* name) {
     int max_entries = (bpb->sectors_per_cluster * 512) / sizeof(fat32_dir_entry_t);
 
     for (int i = 0; i < max_entries; i++) {
-        int match = 1;
-        for(int j=0; j<11; j++) if(entries[i].name[j] != fat_name[j]) match = 0;
-        if(match && (entries[i].attr & FAT_ATTR_DIRECTORY)) {
+        if (entries[i].name[0] == 0x00) break;
+        if (entries[i].name[0] == 0xE5) continue;
+        if (entries[i].attr == FAT_ATTR_LFN) continue;
+        if (!(entries[i].attr & FAT_ATTR_DIRECTORY)) continue;
+        if (_fat32_entry_matches(entries, i, name)) {
             u32 new_cluster = ((u32)entries[i].cluster_hi << 16) | entries[i].cluster_lo;
             if (new_cluster == 0) new_cluster = bpb->root_cluster;
             _fat32_set_current_dir_cluster(new_cluster);

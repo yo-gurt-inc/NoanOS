@@ -67,4 +67,7 @@ int task_exec(const char* path, char** argv, char** envp);
 process_t* get_current_process(void);
 process_t* get_process_list(void);
 
+/* Set nonzero to silence the per-switch serial chatter (automated test runs). */
+extern int task_switch_quiet;
+
 #endif

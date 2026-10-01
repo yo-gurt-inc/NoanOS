@@ -70,11 +70,22 @@ start:
     
     cmp word [0x91FE], 0xAA55
     jne .skip_smart
-    
+
+    ; Test mode ('make test'): if sector 700 of the boot disk (0x80) carries
+    ; the "AUTO" marker, skip the keypress prompt and chainload the HDD
+    ; straight away. Boot 1 of a test run never reaches here (the fresh HDD
+    ; is not bootable), so the live kernel still boots and installs.
+    mov eax, 700            ; INSTALLER_MARKER_SECTOR (see installer.h)
+    mov cx, 1
+    mov bx, 0x0800          ; read into segment 0x0800 (scratch at 0x8000)
+    call read_lba
+    cmp dword [0x8000], 0x4F545541   ; 'AUTO' (little-endian)
+    je .boot_hdd
+
     ; HDD found! Ask user
     mov si, msg_smart
     call print_string
-    
+
     ; Wait for 'i' for installer, otherwise boot HDD
     mov ah, 0
     int 0x16
@@ -82,7 +93,8 @@ start:
     je .skip_smart
     cmp al, 'I'
     je .skip_smart
-    
+
+.boot_hdd:
     ; Boot HDD
     mov dl, 0x81
     jmp 0x0000:0x9000

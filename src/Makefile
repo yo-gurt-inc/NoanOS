@@ -13,14 +13,14 @@ USER_DIR     = user
 TOOLS_DIR    = tools
 
 # musl-linked ELF programs (drop .c/.cpp files in rootfs_src/)
-MUSL         = /root/NoanOS/musl-noan
+MUSL         = $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../musl-noan)
 MUSL_CC      = $(CC) -m32 -march=i686 -static -nostdlib \
                -I$(MUSL)/include -Wl,-Ttext-segment=0x08000000 \
                $(MUSL)/lib/crt1.o $(MUSL)/lib/crti.o
-MUSL_LIBS    = $(MUSL)/lib/libc.a $(MUSL)/lib/crtn.o -lgcc -lgcc_eh
+MUSL_LIBS    = $(MUSL)/lib/libc.a $(MUSL)/lib/crtn.o -lgcc
 
-GCC_LIB      = /usr/lib/gcc-cross/i686-linux-gnu/14
-CXX_INC      = /usr/i686-linux-gnu/include/c++/14
+GCC_LIB      = /usr/lib/gcc-cross/i686-linux-gnu/15
+CXX_INC      = /usr/i686-linux-gnu/include/c++/15
 SHIM         = $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../musl-noan-cxx-shim)
 MUSL_CXX     = i686-linux-gnu-g++ -m32 -march=i686 -static -nostdlib -nostdinc \
                -I$(SHIM) \
@@ -84,6 +84,12 @@ vpath %.c kernel/core kernel/cpu kernel/io kernel/storage kernel/system userspac
 DISK_IMG = $(IMG_DIR)/disk.img
 HDD_IMG  = $(IMG_DIR)/hdd.img
 
+# Boot-mode marker location: byte offset of sector 700 (INSTALLER_MARKER_SECTOR
+# in kernel/include/core/installer.h). Sector 255 would fall inside the initrd
+# (LBA 121-632) and corrupt an in-memory binary; 700 is past the initrd on the
+# live disk and inside the FAT32 reserved region on the installed disk.
+MARKER_SEEK = 358400
+
 # Progress tracking
 TOTAL_FILES := $(words $(KERNEL_C) $(SH_C) $(KERNEL_ASM) $(USER_SRC))
 CURRENT     := 0
@@ -130,6 +136,18 @@ $(BIN_DIR)/%: $(USER_DIR)/%.c | $(BIN_DIR) $(BUILD_DIR)
 	@$(LD) -Ttext 0xA00000 --entry _start --oformat binary -m elf_i386 $(BUILD_DIR)/$*.o -o $(BUILD_DIR)/$*.flat
 	@python3 $(TOOLS_DIR)/mknoan.py $(BUILD_DIR)/$*.flat $(BIN_DIR)/$*
 
+# runtests is the resident binary for 'make test': it loads at 0x900000
+# (kernel/storage/noan.c picks the same address) so NOAN children loading at
+# 0xA00000 cannot overwrite it while it blocks waiting for them - and so
+# running it from the shell does not clobber the shell's own image at
+# 0x800000. (Explicit rule overrides the pattern.)
+$(BIN_DIR)/runtests: $(USER_DIR)/runtests.c | $(BIN_DIR) $(BUILD_DIR)
+	$(eval CURRENT := $(shell echo $$(($(CURRENT)+1))))
+	@printf "\033[0;34m[%2d/$(TOTAL_FILES)]\033[0m Building user program: \033[0;36mruntests @0x900000\033[0m\n" $(CURRENT)
+	@$(CC) $(CFLAGS) -I kernel/include -c $< -o $(BUILD_DIR)/runtests.o
+	@$(LD) -Ttext 0x900000 --entry _start --oformat binary -m elf_i386 $(BUILD_DIR)/runtests.o -o $(BUILD_DIR)/runtests.flat
+	@python3 $(TOOLS_DIR)/mknoan.py $(BUILD_DIR)/runtests.flat $(BIN_DIR)/runtests
+
 rootfs/bin:
 	@mkdir -p rootfs/bin
 
@@ -160,7 +178,7 @@ $(DISK_IMG): $(BOOT_BIN) $(KERNEL_BIN) $(INITRD_BIN) | $(IMG_DIR)
 	@dd if=$(BOOT_BIN)   of=$(DISK_IMG) conv=notrunc bs=512 seek=0 2>/dev/null
 	@dd if=$(KERNEL_BIN) of=$(DISK_IMG) conv=notrunc bs=512 seek=1 2>/dev/null
 	@dd if=$(INITRD_BIN) of=$(DISK_IMG) conv=notrunc bs=512 seek=121 2>/dev/null
-	@printf "LIVE" | dd of=$(DISK_IMG) bs=1 seek=130560 conv=notrunc 2>/dev/null
+	@printf "LIVE" | dd of=$(DISK_IMG) bs=1 seek=$(MARKER_SEEK) conv=notrunc 2>/dev/null
 
 $(HDD_IMG): | $(IMG_DIR)
 	@printf "\033[0;33m[IMG]\033[0m Creating blank HDD image...\n"
@@ -199,8 +217,27 @@ run-installed: $(HDD_IMG)
 	pkill -f "qemu-system-i[3]86" || true
 	qemu-system-i386 -drive format=raw,file=$(HDD_IMG),index=0
 
+# Automated end-to-end tests: boot the live disk with an "AUTO" marker, which
+# makes the OS auto-install onto the HDD (no keypresses), reboot, boot the
+# installed HDD and run every /bin binary. run_tests.py asserts the results
+# from the serial log and exits nonzero on any failure. Afterwards everything
+# is restored: disk.img gets its "LIVE" marker back and the HDD is rebuilt
+# blank, so `make run` behaves exactly as before.
+test: all
+	rm -f $(HDD_IMG) $(DISK_IMG) build/img/test-serial.log
+	$(MAKE) all
+	printf 'AUTO' | dd of=$(DISK_IMG) bs=1 seek=$(MARKER_SEEK) conv=notrunc 2>/dev/null
+	@rc=0; \
+	python3 tools/run_tests.py $(DISK_IMG) $(HDD_IMG) build/img/test-serial.log; \
+	rc=$$?; \
+	printf 'LIVE' | dd of=$(DISK_IMG) bs=1 seek=$(MARKER_SEEK) conv=notrunc 2>/dev/null; \
+	rm -f $(HDD_IMG); \
+	$(MAKE) -s $(HDD_IMG) >/dev/null 2>&1; \
+	rm -f build/img/test-serial.log; \
+	exit $$rc
+
 clean:
 	@printf "\033[0;31m[CLEAN]\033[0m Removing build artifacts...\n"
 	@rm -rf $(BUILD_DIR) $(IMG_DIR) $(BIN_DIR)
 
-.PHONY: all run run-installed clean
+.PHONY: all run run-installed test clean

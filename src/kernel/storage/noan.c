@@ -111,18 +111,31 @@ found:
     // Isolation: Shell stays at 0x800000, others go to 0xA00000
     u32 load_addr = 0xA00000;
     
-    // Check if we are loading the shell
+    // "Resident" binaries park while their children run, so they must load
+    // somewhere their children never overwrite:
+    //   - the shell (the interactive parent) stays at 0x800000;
+    //   - the test runner (runtests) lives at 0x900000 so that running it
+    //     FROM the shell does not clobber the parked shell's image at
+    //     0x800000. Children (NOAN at 0xA00000, ELF in their own address
+    //     space at 0x08000000) touch neither address.
     const char* s = search_name;
     int is_shell = 0;
+    int is_runner = 0;
     while (*s) {
         if (s[0] == 's' && s[1] == 'h' && s[2] == 'e' && s[3] == 'l' && s[4] == 'l') {
             is_shell = 1;
             break;
         }
+        if (s[0] == 'r' && s[1] == 'u' && s[2] == 'n' && s[3] == 't' && s[4] == 'e' &&
+            s[5] == 's' && s[6] == 't' && s[7] == 's') {
+            is_runner = 1;
+            break;
+        }
         s++;
     }
-    
+
     if (is_shell) load_addr = 0x800000;
+    else if (is_runner) load_addr = 0x900000;
 
     u8* dest = (u8*)load_addr;
     u32 payload_size = entry.file_size - sizeof(noan_header_t);

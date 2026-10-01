@@ -36,6 +36,7 @@
 #define SYS_FLUSH_KB  29   /* Discard all buffered keypresses */
 #define SYS_KB_ENABLE 30   /* 0 = discard input during command, 1 = re-enable + flush */
 #define SYS_EXEC_ELF  31   /* load+run an ELF binary from FAT32: arg1=path */
+#define SYS_READDIR   32   /* native dir listing: arg1=path arg2=index arg3=name_out; returns 1/0/-1 */
 
 void syscall_init(void);
 u32 syscall_handler(u32 esp);

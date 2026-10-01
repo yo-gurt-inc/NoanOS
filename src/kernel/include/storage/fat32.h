@@ -91,4 +91,19 @@ int          _fat32_find_entry(const char* name, fat32_dir_entry_t* out_entry);
 void         _fat32_create_entry(const char* name, u8 attr, u32 first_cluster, u32 size);
 int          _fat32_find_full_path_file(const char* path, fat32_dir_entry_t* out_entry);
 
+/* VFAT long filename (LFN) support.
+ *
+ * dir_entries points at a whole directory-cluster buffer; idx is the index
+ * of a real (non-LFN) 8.3 entry inside it. _fat32_entry_full_name returns 1
+ * and writes the entry's true name (reconstructed from the LFN run directly
+ * above it when present and valid, else the readable 8.3 form) into out;
+ * returns 0 only on a truncated buffer. _fat32_entry_matches compares a
+ * path component against that same name, case-insensitively; without a
+ * valid LFN run it falls back to the byte-exact 8.3 alias comparison.
+ */
+int _fat32_entry_full_name(const fat32_dir_entry_t* dir_entries, int idx,
+                           char* out, int out_size);
+int _fat32_entry_matches(const fat32_dir_entry_t* dir_entries, int idx,
+                         const char* component);
+
 #endif
